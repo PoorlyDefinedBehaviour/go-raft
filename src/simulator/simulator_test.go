@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
 	"github.com/poorlydefinedbehaviour/raft-go/src/raft"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
 )
@@ -38,7 +39,8 @@ func TestSimulate(t *testing.T) {
 
 	for i := 0; i < numReplicas; i++ {
 		config := raft.Config{
-			ReplicaID:             1,
+			ReplicaID:             uint16(i),
+			ReplicaAddress:        fmt.Sprintf("localhost:800%d", i),
 			LeaderElectionTimeout: 10 * time.Second,
 			Replicas:              make([]raft.Replica, 0),
 		}
@@ -46,15 +48,21 @@ func TestSimulate(t *testing.T) {
 			if i == j {
 				continue
 			}
-			config.Replicas = append(config.Replicas, raft.Replica{Address: fmt.Sprintf("address-%d", j)})
+			config.Replicas = append(config.Replicas, raft.Replica{
+				ReplicaID:      uint16(j),
+				ReplicaAddress: fmt.Sprintf("localhost:800%d", j),
+			})
 		}
-		raft := raft.NewRaft(config, NewMessageBus(network))
-		network.AddReplica(raft)
+		raft := raft.NewRaft(config, messagebus.NewMessageBus(network))
 		replicas = append(replicas, raft)
 	}
+	network.buildNetworkPaths(replicas)
 
-	for i := 0; i < 10_002; i++ {
+	for i := 0; i < 10_010; i++ {
 		network.Tick()
-		replicas[0].Tick()
+
+		for _, replica := range replicas {
+			replica.Tick()
+		}
 	}
 }

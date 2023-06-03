@@ -2,6 +2,8 @@ package simulator_test
 
 import (
 	"container/heap"
+
+	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 )
 
 // A PriorityQueue implements heap.Interface and holds Items.
@@ -38,7 +40,7 @@ func (pq *PriorityQueue) Pop() any {
 }
 
 // update modifies the priority and value of an Item in the queue.
-func (pq *PriorityQueue) update(item *MessageToSend, message []byte, priority int) {
+func (pq *PriorityQueue) update(item *MessageToSend, message types.Message, priority int) {
 	item.Message = message
 	item.AfterTick = uint64(priority)
 	heap.Fix(pq, item.Index)

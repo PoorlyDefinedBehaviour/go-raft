@@ -4,24 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/poorlydefinedbehaviour/raft-go/src/types"
+	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
 	"github.com/stretchr/testify/assert"
 )
-
-type DummyMessageBus struct{}
-
-func (*DummyMessageBus) RequestVote(targetReplicaAddress string, input types.RequestVoteInput) {
-	panic("unimplemented")
-}
-func (*DummyMessageBus) SendRequestVoteResponse(targetReplicaAddress string, input types.RequestVoteOutput) {
-	panic("unimplemented")
-}
-func (*DummyMessageBus) Receive() types.Message {
-	panic("unimplemented")
-}
-func NewDummyMessageBus() *DummyMessageBus {
-	return &DummyMessageBus{}
-}
 
 func TestLeaderElectionTimeoutFired(t *testing.T) {
 	cases := []struct {
@@ -45,7 +30,7 @@ func TestLeaderElectionTimeoutFired(t *testing.T) {
 	}
 
 	for _, tt := range cases {
-		raft := NewRaft(tt.config, NewDummyMessageBus())
+		raft := NewRaft(tt.config, messagebus.NewMessageBus(nil))
 		raft.mutableState.currentTick = tt.initialCurrentTick
 		actual := raft.leaderElectionTimeoutFired()
 		assert.Equal(t, tt.expected, actual, tt.description)

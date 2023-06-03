@@ -1,6 +1,7 @@
 package types
 
 type ReplicaID = uint16
+type ReplicaAddress = string
 
 type Message interface {
 	Message()
@@ -24,4 +25,9 @@ type RequestVoteOutput struct {
 
 func (*RequestVoteOutput) Message() {
 	panic("unimplemented")
+}
+
+type Network interface {
+	Receive(replicaAddress ReplicaAddress) (Message, error)
+	Send(fromReplicaAddress, toReplicaAddress ReplicaAddress, message Message)
 }
