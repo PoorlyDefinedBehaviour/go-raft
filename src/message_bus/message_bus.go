@@ -22,6 +22,14 @@ func (messageBus *MessageBus) SendRequestVoteResponse(fromReplicaAddress, toRepl
 	messageBus.network.Send(fromReplicaAddress, toReplicaAddress, &message)
 }
 
+func (messageBus *MessageBus) SendAppendEntriesRequest(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.AppendEntriesInput) {
+	messageBus.network.Send(fromReplicaAddress, toReplicaAddress, &message)
+}
+
+func (messageBus *MessageBus) SendAppendEntriesResponse(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.AppendEntriesOutput) {
+	messageBus.network.Send(fromReplicaAddress, toReplicaAddress, &message)
+}
+
 func (messageBus *MessageBus) Receive(replicaAddress types.ReplicaAddress) (types.Message, error) {
 	message, err := messageBus.network.Receive(replicaAddress)
 	if err != nil {

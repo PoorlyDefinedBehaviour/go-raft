@@ -1,12 +1,14 @@
 package raft
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
+	"github.com/poorlydefinedbehaviour/raft-go/src/storage"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 )
 
@@ -27,6 +29,11 @@ type Raft struct {
 
 	// The state mutated directly by the Raft struct.
 	mutableState MutableState
+
+	// The state machine being built on top of raft.
+	stateMachine types.StateMachine
+
+	storage storage.Storage
 }
 
 type MutableState struct {
@@ -35,6 +42,9 @@ type MutableState struct {
 
 	// State that is reset every new term.
 	currentTermState CurrentTermState
+
+	// Index that has been committed by the leader.
+	commitIndex uint64
 
 	// The current state of this replica.
 	state State
@@ -67,7 +77,7 @@ type Config struct {
 	// How long to wait for without receiving a heartbeat from the leader to start an election.
 	LeaderElectionTimeout time.Duration
 
-	// The list of other replicas in the cluste. Should not include this replica.
+	// The list of other replicas in the cluster. Should not include this replica.
 	Replicas []Replica
 }
 
@@ -76,10 +86,25 @@ type Replica struct {
 	ReplicaAddress types.ReplicaAddress
 }
 
-func NewRaft(config Config, messageBus *messagebus.MessageBus) *Raft {
+func NewRaft(config Config, messageBus *messagebus.MessageBus, storage storage.Storage, stateMachine types.StateMachine) (*Raft, error) {
+	if config.ReplicaID == 0 {
+		return nil, fmt.Errorf("replica id cannot be 0")
+	}
+	if config.ReplicaAddress == "" {
+		return nil, fmt.Errorf("replica address is required")
+	}
+	if config.LeaderElectionTimeout == 0 {
+		return nil, fmt.Errorf("leader election timeout is required")
+	}
+
+	// Ensure the replica itself is not in the replica list.
+	config.Replicas = removeByReplicaID(config.Replicas, config.ReplicaID)
+
 	raft := &Raft{
-		config:     config,
-		messageBus: messageBus,
+		config:       config,
+		messageBus:   messageBus,
+		storage:      storage,
+		stateMachine: stateMachine,
 		mutableState: MutableState{
 			currentTick: 0,
 			state:       Follower,
@@ -94,7 +119,19 @@ func NewRaft(config Config, messageBus *messagebus.MessageBus) *Raft {
 
 	raft.transitionToState(Follower)
 
-	return raft
+	return raft, nil
+}
+
+func removeByReplicaID(replicas []Replica, replicaID types.ReplicaID) []Replica {
+	out := make([]Replica, 0, len(replicas))
+
+	for _, replica := range replicas {
+		if replica.ReplicaID != replicaID {
+			out = append(out, replica)
+		}
+	}
+
+	return out
 }
 
 func (raft *Raft) ReplicaAddress() types.ReplicaAddress {
@@ -133,20 +170,8 @@ func (raft *Raft) majority() uint16 {
 	return uint16(len(raft.config.Replicas)/2 + 1)
 }
 
-func (raft *Raft) LastLogTerm() uint64 {
-	return 1
-}
-
-func (raft *Raft) LastLogIndex() uint64 {
-	return 1
-}
-
 func (raft *Raft) VotedForCandidateInCurrentTerm(candidateID uint16) bool {
 	return raft.mutableState.currentTermState.votedFor == candidateID
-}
-
-func (raft *Raft) HasVotedInCurrentTerm() bool {
-	return raft.mutableState.currentTermState.votedFor != 0
 }
 
 func (raft *Raft) resetElectionTimeout() {
@@ -184,16 +209,32 @@ func withTerm(term uint64) newTermOption {
 	}
 }
 
-func (raft *Raft) newTerm(options ...newTermOption) {
-	raft.mutableState.currentTermState = CurrentTermState{
+func (raft *Raft) newTerm(options ...newTermOption) error {
+	newState := CurrentTermState{
 		term:          raft.mutableState.currentTermState.term + 1,
 		votedFor:      0,
 		votesReceived: 0,
 	}
 	for _, option := range options {
-		option(&raft.mutableState.currentTermState)
+		option(&newState)
 	}
+
+	if err := raft.storage.Persist(storage.State{CurrentTerm: newState.term, VotedFor: newState.votedFor}); err != nil {
+		return fmt.Errorf("persisting term and voted for: %w", err)
+	}
+
+	raft.mutableState.currentTermState = newState
+
 	log.Printf("replica=%s term=%d changed to new term\n", raft.ReplicaAddress(), raft.mutableState.currentTermState.term)
+
+	return nil
+}
+
+func (raft *Raft) voteFor(candidateID types.ReplicaID, candidateTerm uint64) {
+	raft.newTerm(withTerm(candidateTerm))
+	raft.mutableState.currentTermState.votedFor = candidateID
+	raft.transitionToState(Follower)
+	log.Printf("replica=%s term=%d candidate=%d voted for candidate\n", raft.ReplicaAddress(), candidateID, raft.mutableState.currentTermState.term)
 }
 
 func (raft *Raft) transitionToState(state State) {
@@ -223,6 +264,85 @@ func (raft *Raft) handleMessages() {
 	}
 
 	switch message := message.(type) {
+	// Invoked by leader to replicate log entries (§5.3); also used as
+	// heartbeat (§5.2).
+	//
+	// Arguments:
+	// term leader’s term
+	// leaderId so follower can redirect clients
+	// prevLogIndex index of log entry immediately preceding
+	// new ones
+	// prevLogTerm term of prevLogIndex entry
+	// entries[] log entries to store (empty for heartbeat;
+	// may send more than one for efficiency)
+	// leaderCommit leader’s commitIndex
+	//
+	// Results:
+	// term currentTerm, for leader to update itself
+	// success true if follower contained entry matching
+	// prevLogIndex and prevLogTerm
+	// Receiver implementation:
+	// 1. Reply false if term < currentTerm (§5.1)
+	// 2. Reply false if log doesn’t contain an entry at prevLogIndex
+	// whose term matches prevLogTerm (§5.3)
+	// 3. If an existing entry conflicts with a new one (same index
+	// but different terms), delete the existing entry and all that
+	// follow it (§5.3)
+	// 4. Append any new entries not already in the log
+	// 5. If leaderCommit > commitIndex, set commitIndex to min(leaderCommit, lastLogIndex)
+	case *types.AppendEntriesInput:
+		log.Printf("replica=%s message=%+v handling AppendEntries\n", raft.ReplicaAddress(), message)
+
+		replica := findReplicaByID(raft.config.Replicas, message.LeaderID)
+
+		appendEntriesOutput := types.AppendEntriesOutput{
+			CurrentTerm:      raft.mutableState.currentTermState.term,
+			Success:          false,
+			PreviousLogIndex: raft.storage.LastLogIndex(),
+			PreviousLogTerm:  raft.storage.LastLogTerm(),
+		}
+
+		if message.LeaderTerm < raft.mutableState.currentTermState.term {
+			raft.messageBus.SendAppendEntriesResponse(raft.config.ReplicaAddress, replica.ReplicaAddress, appendEntriesOutput)
+			return
+		}
+
+		if message.PreviousLogIndex != raft.storage.LastLogIndex() {
+			raft.messageBus.SendAppendEntriesResponse(raft.config.ReplicaAddress, replica.ReplicaAddress, appendEntriesOutput)
+			return
+		}
+
+		entry, err := raft.storage.GetEntryAtIndex(message.PreviousLogIndex)
+		if err != nil && !errors.Is(err, storage.ErrIndexOutOfBounds) {
+			panic("todo")
+		}
+
+		success := true
+
+		if entry != nil && entry.Term != message.PreviousLogTerm {
+			success = false
+			if err := raft.storage.TruncateLogStartingFrom(message.PreviousLogIndex); err != nil {
+				panic(fmt.Sprintf("TODO: %s", err))
+			}
+		}
+
+		if err := raft.storage.AppendEntries(message.Entries); err != nil {
+			panic("todo")
+		}
+
+		if message.LeaderCommitIndex > raft.mutableState.commitIndex {
+			raft.applyUncommittedEntries(message.LeaderCommitIndex, raft.storage.LastLogIndex())
+		}
+
+		raft.mutableState.currentTermState.term = message.LeaderTerm
+
+		raft.messageBus.SendAppendEntriesResponse(raft.config.ReplicaAddress, replica.ReplicaAddress, types.AppendEntriesOutput{
+			CurrentTerm:      raft.mutableState.currentTermState.term,
+			Success:          success,
+			PreviousLogIndex: raft.storage.LastLogIndex(),
+			PreviousLogTerm:  raft.storage.LastLogTerm(),
+		})
+
 	case *types.RequestVoteInput:
 		log.Printf("replica=%s message=%+v handling RequestVote\n", raft.ReplicaAddress(), message)
 
@@ -232,31 +352,35 @@ func (raft *Raft) handleMessages() {
 		// 2. If votedFor is null or candidateId, and candidate’s log is at
 		// least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
 		if message.CandidateTerm < raft.mutableState.currentTermState.term {
+			log.Printf("replica=%s candidateTerm=%d replicaTerm=%d candidate term is less than replica term, not granting vote\n", raft.ReplicaAddress(), message.CandidateTerm, raft.mutableState.currentTermState.term)
 			raft.messageBus.SendRequestVoteResponse(raft.config.ReplicaAddress, replica.ReplicaAddress, types.RequestVoteOutput{
-				CurrentTerm:  raft.mutableState.currentTermState.term,
-				VotedGranted: false,
+				CurrentTerm: raft.mutableState.currentTermState.term,
+				VoteGranted: false,
 			})
 			return
 		}
 
-		if message.CandidateTerm > raft.mutableState.currentTermState.term {
-			raft.newTerm(withTerm(message.CandidateTerm))
-			raft.transitionToState(Follower)
-		}
+		alreadyVotedForCandidate := raft.hasVotedForCandidate(message.CandidateID)
+		hasVoted := raft.hasVoted()
+		candidateLogUpToDate := raft.isCandidateLogUpToDate(message)
+		voteGranted := alreadyVotedForCandidate || (!hasVoted && candidateLogUpToDate)
 
-		voteGranted :=
-			raft.VotedForCandidateInCurrentTerm(message.CandidateID) ||
-				(!raft.HasVotedInCurrentTerm() && raft.isCandidateLogUpToDate(message))
-
-		raft.messageBus.SendRequestVoteResponse(raft.ReplicaAddress(), replica.ReplicaAddress, types.RequestVoteOutput{
-			CurrentTerm:  raft.mutableState.currentTermState.term,
-			VotedGranted: voteGranted,
-		})
+		log.Printf("replica=%s voteGranted=%v alreadyVotedForCandidate=%v hasVoted=%v candidateLogUpToDate=%v\n",
+			raft.ReplicaAddress(),
+			voteGranted,
+			alreadyVotedForCandidate,
+			hasVoted,
+			candidateLogUpToDate,
+		)
 
 		if voteGranted {
-			raft.transitionToState(Follower)
-			raft.mutableState.currentTermState.votedFor = message.CandidateID
+			raft.voteFor(message.CandidateID, message.CandidateTerm)
 		}
+
+		raft.messageBus.SendRequestVoteResponse(raft.ReplicaAddress(), replica.ReplicaAddress, types.RequestVoteOutput{
+			CurrentTerm: raft.mutableState.currentTermState.term,
+			VoteGranted: voteGranted,
+		})
 
 	case *types.RequestVoteOutput:
 		log.Printf("replica=%s message=%+v handling RequestVoteOutput\n", raft.ReplicaAddress(), message)
@@ -267,7 +391,7 @@ func (raft *Raft) handleMessages() {
 			return
 		}
 
-		if message.VotedGranted {
+		if message.VoteGranted {
 			raft.mutableState.currentTermState.votesReceived++
 
 			if raft.mutableState.currentTermState.votesReceived >= raft.majority() {
@@ -279,14 +403,53 @@ func (raft *Raft) handleMessages() {
 	}
 }
 
-func (raft *Raft) isCandidateLogUpToDate(input *types.RequestVoteInput) bool {
-	return input.CandidateTerm >= raft.mutableState.currentTermState.term &&
-		input.CandidateLastLogTerm >= raft.LastLogTerm() &&
-		input.CandidateLastLogIndex >= raft.LastLogIndex()
-}
-
 func (raft *Raft) leaderElectionTimeoutFired() bool {
 	return raft.mutableState.currentTick > raft.mutableState.nextLeaderElectionTimeout
+}
+
+func (raft *Raft) isCandidateLogUpToDate(input *types.RequestVoteInput) bool {
+	upToDate := input.CandidateTerm >= raft.mutableState.currentTermState.term &&
+		input.CandidateLastLogTerm >= raft.storage.LastLogTerm() &&
+		input.CandidateLastLogIndex >= raft.storage.LastLogIndex()
+
+	if !upToDate {
+		log.Printf("replica=%s candidateID=%d candidateLastLogTerm=%d candidateLastLogIndex=%d candidate log is not up to date\n",
+			raft.ReplicaAddress(),
+			input.CandidateID,
+			input.CandidateLastLogIndex,
+			input.CandidateLastLogTerm,
+		)
+	}
+
+	return upToDate
+}
+
+func (raft *Raft) hasVotedForCandidate(candidateID types.ReplicaID) bool {
+	return raft.mutableState.currentTermState.votedFor == candidateID
+}
+
+func (raft *Raft) hasVoted() bool {
+	return raft.mutableState.currentTermState.votedFor != 0
+}
+
+func (raft *Raft) applyUncommittedEntries(leaderCommitIndex uint64, lastlogIndex uint64) error {
+	commitIndex := leaderCommitIndex
+	if lastlogIndex < leaderCommitIndex {
+		commitIndex = lastlogIndex
+	}
+	for i := raft.mutableState.commitIndex; i < commitIndex; i++ {
+		entry, err := raft.storage.GetEntryAtIndex(i)
+		if err != nil {
+			return fmt.Errorf("fetching entry at index: index=%d %w", i, err)
+		}
+		if err := raft.stateMachine.Apply(entry); err != nil {
+			return fmt.Errorf("applying entry to state machine: %w", err)
+		}
+	}
+
+	raft.mutableState.commitIndex = commitIndex
+
+	return nil
 }
 
 func findReplicaByID(replicas []Replica, replicaID types.ReplicaID) Replica {

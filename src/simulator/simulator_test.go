@@ -8,9 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/poorlydefinedbehaviour/raft-go/src/kv"
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
 	"github.com/poorlydefinedbehaviour/raft-go/src/raft"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
+	"github.com/poorlydefinedbehaviour/raft-go/src/storage"
+	"github.com/poorlydefinedbehaviour/raft-go/src/testing/network"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestSimulate(t *testing.T) {
@@ -26,14 +30,14 @@ func TestSimulate(t *testing.T) {
 
 	rand := rand.NewRand(seed)
 
-	networkConfig := NetworkConfig{
+	networkConfig := network.NetworkConfig{
 		PathClogProbability:      0.1,
 		MessageReplayProbability: 0.1,
 		DropMessageProbability:   0.1,
 		MaxNetworkPathClogTicks:  10_000,
 		MaxMessageDelayTicks:     10_000,
 	}
-	network := NewNetwork(networkConfig, rand)
+	network := network.NewNetwork(networkConfig, rand, []string{})
 
 	replicas := make([]*raft.Raft, 0, numReplicas)
 
@@ -53,10 +57,10 @@ func TestSimulate(t *testing.T) {
 				ReplicaAddress: fmt.Sprintf("localhost:800%d", j),
 			})
 		}
-		raft := raft.NewRaft(config, messagebus.NewMessageBus(network))
+		raft, err := raft.NewRaft(config, messagebus.NewMessageBus(network), storage.NewFileStorage(), kv.NewKvStore())
+		assert.NoError(t, err)
 		replicas = append(replicas, raft)
 	}
-	network.buildNetworkPaths(replicas)
 
 	for i := 0; i < 10_010; i++ {
 		network.Tick()

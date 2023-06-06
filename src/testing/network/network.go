@@ -1,7 +1,8 @@
-package simulator_test
+package network
 
 import (
-	"github.com/poorlydefinedbehaviour/raft-go/src/raft"
+	"fmt"
+
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 )
@@ -20,8 +21,6 @@ type Network struct {
 	rand rand.Random
 
 	ticks uint64
-
-	replicas []*raft.Raft
 
 	// The network path from replica A to replica B.
 	networkPaths []NetworkPath
@@ -56,31 +55,30 @@ type MessageToSend struct {
 	Index              int
 }
 
-func NewNetwork(config NetworkConfig, rand rand.Random) *Network {
+func NewNetwork(config NetworkConfig, rand rand.Random, replicaAddresses []types.ReplicaAddress) *Network {
 	return &Network{
 		config:                config,
-		replicas:              make([]*raft.Raft, 0),
 		rand:                  rand,
-		networkPaths:          make([]NetworkPath, 0),
+		networkPaths:          buildNetworkPaths(replicaAddresses),
 		sendMessageQueue:      make(PriorityQueue, 0),
 		toDeliverMessageQueue: make(map[types.ReplicaAddress][]types.Message, 0),
 	}
 }
 
-func (network *Network) buildNetworkPaths(replicas []*raft.Raft) {
+func buildNetworkPaths(replicasAddresses []types.ReplicaAddress) []NetworkPath {
 	paths := make([]NetworkPath, 0)
 
-	for _, fromReplica := range replicas {
-		for _, toReplica := range replicas {
+	for _, fromReplica := range replicasAddresses {
+		for _, toReplica := range replicasAddresses {
 			if fromReplica == toReplica {
 				continue
 			}
 
-			paths = append(paths, newNetworkPath(fromReplica.ReplicaAddress(), toReplica.ReplicaAddress()))
+			paths = append(paths, newNetworkPath(fromReplica, toReplica))
 		}
 	}
 
-	network.networkPaths = paths
+	return paths
 }
 
 func (network *Network) Send(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.Message) {
@@ -147,6 +145,9 @@ func (network *Network) findPath(fromReplicaAddress, toReplicaAddress types.Repl
 			return path
 		}
 	}
+	fmt.Printf("\n\naaaaaaa fromReplicaAddress %+v\n\n", fromReplicaAddress)
+	fmt.Printf("\n\naaaaaaa toReplicaAddress %+v\n\n", toReplicaAddress)
+	fmt.Printf("\n\naaaaaaa network.networkPaths %+v\n\n", network.networkPaths)
 	panic("unreachable")
 }
 

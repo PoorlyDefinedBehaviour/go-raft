@@ -1,4 +1,4 @@
-package simulator_test
+package network
 
 import (
 	"container/heap"
