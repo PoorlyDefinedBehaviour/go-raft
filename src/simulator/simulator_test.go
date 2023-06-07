@@ -42,9 +42,10 @@ func TestSimulate(t *testing.T) {
 	replicas := make([]*raft.Raft, 0, numReplicas)
 
 	for i := 0; i < numReplicas; i++ {
+		replicaiID := i + 1
 		config := raft.Config{
-			ReplicaID:             uint16(i),
-			ReplicaAddress:        fmt.Sprintf("localhost:800%d", i),
+			ReplicaID:             uint16(replicaiID),
+			ReplicaAddress:        fmt.Sprintf("localhost:800%d", replicaiID),
 			LeaderElectionTimeout: 10 * time.Second,
 			Replicas:              make([]raft.Replica, 0),
 		}
@@ -52,12 +53,14 @@ func TestSimulate(t *testing.T) {
 			if i == j {
 				continue
 			}
+			otherReplicaID := j + i
+
 			config.Replicas = append(config.Replicas, raft.Replica{
-				ReplicaID:      uint16(j),
-				ReplicaAddress: fmt.Sprintf("localhost:800%d", j),
+				ReplicaID:      uint16(otherReplicaID),
+				ReplicaAddress: fmt.Sprintf("localhost:800%d", otherReplicaID),
 			})
 		}
-		raft, err := raft.NewRaft(config, messagebus.NewMessageBus(network), storage.NewFileStorage(), kv.NewKvStore())
+		raft, err := raft.NewRaft(config, messagebus.NewMessageBus(network), storage.NewFileStorage(), kv.NewKvStore[string, string]())
 		assert.NoError(t, err)
 		replicas = append(replicas, raft)
 	}

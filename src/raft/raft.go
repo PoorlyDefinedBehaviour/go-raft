@@ -156,10 +156,14 @@ func (raft *Raft) Tick() {
 			raft.transitionToState(Candidate)
 			return
 		}
-		raft.handleMessages()
+		if err := raft.handleMessages(); err != nil {
+			log.Printf("replica=%s handling messages: %s", raft.ReplicaAddress(), err.Error())
+		}
 	case Candidate:
 		raft.startElection()
-		raft.handleMessages()
+		if err := raft.handleMessages(); err != nil {
+			log.Printf("replica=%s handling messages: %s", raft.ReplicaAddress(), err.Error())
+		}
 	case Leader:
 	default:
 		panic(fmt.Sprintf("unexpected raft state: %d", raft.mutableState.state))
@@ -253,14 +257,13 @@ func (raft *Raft) transitionToState(state State) {
 	}
 }
 
-func (raft *Raft) handleMessages() {
+func (raft *Raft) handleMessages() error {
 	message, err := raft.messageBus.Receive(raft.ReplicaAddress())
 	if message == nil {
-		return
+		return nil
 	}
 	if err != nil {
-		log.Printf("error receiving message from message bus: %s", err)
-		return
+		return fmt.Errorf("error receiving message from message bus: %s", err)
 	}
 
 	switch message := message.(type) {
@@ -303,35 +306,58 @@ func (raft *Raft) handleMessages() {
 		}
 
 		if message.LeaderTerm < raft.mutableState.currentTermState.term {
+			log.Printf("replica=%s leader term is less than the curren term\n", raft.ReplicaAddress())
 			raft.messageBus.SendAppendEntriesResponse(raft.config.ReplicaAddress, replica.ReplicaAddress, appendEntriesOutput)
-			return
+			return nil
 		}
 
 		if message.PreviousLogIndex != raft.storage.LastLogIndex() {
+			log.Printf("replica=%s message.PreviousLogIndex=%d lastLogIndex=%d log index is not the same as replicas last log index\n",
+				raft.ReplicaAddress(),
+				message.PreviousLogIndex,
+				raft.storage.LastLogIndex(),
+			)
 			raft.messageBus.SendAppendEntriesResponse(raft.config.ReplicaAddress, replica.ReplicaAddress, appendEntriesOutput)
-			return
-		}
-
-		entry, err := raft.storage.GetEntryAtIndex(message.PreviousLogIndex)
-		if err != nil && !errors.Is(err, storage.ErrIndexOutOfBounds) {
-			panic("todo")
+			return nil
 		}
 
 		success := true
 
-		if entry != nil && entry.Term != message.PreviousLogTerm {
-			success = false
-			if err := raft.storage.TruncateLogStartingFrom(message.PreviousLogIndex); err != nil {
-				panic(fmt.Sprintf("TODO: %s", err))
+		if message.PreviousLogIndex > 0 {
+			log.Printf("replica=%s message.PreviousLogIndex=%d getting entry at index\n", raft.ReplicaAddress(), message.PreviousLogIndex)
+			entry, err := raft.storage.GetEntryAtIndex(message.PreviousLogIndex)
+			if err != nil && !errors.Is(err, storage.ErrIndexOutOfBounds) {
+				return fmt.Errorf("getting entry at index: index=%d %w", message.PreviousLogIndex, err)
+			}
+
+			if entry != nil && entry.Term != message.PreviousLogTerm {
+				log.Printf("replica=%s message.PreviousLogIndex=%d message.PreviousLogTerm=%d entry.Term=%d conflicting entries at log index\n",
+					raft.ReplicaAddress(),
+					message.PreviousLogIndex,
+					message.PreviousLogTerm,
+					entry.Term,
+				)
+				success = false
+				log.Printf("replica=%s previousLogIndex=%d truncating log\n", raft.ReplicaAddress(), message.PreviousLogIndex)
+				if err := raft.storage.TruncateLogStartingFrom(message.PreviousLogIndex); err != nil {
+					return fmt.Errorf("truncating log: index=%d %w", message.PreviousLogIndex, err)
+				}
 			}
 		}
 
 		if err := raft.storage.AppendEntries(message.Entries); err != nil {
-			panic("todo")
+			return fmt.Errorf("appending entries to log: entries=%+v %w", message.Entries, err)
 		}
 
 		if message.LeaderCommitIndex > raft.mutableState.commitIndex {
-			raft.applyUncommittedEntries(message.LeaderCommitIndex, raft.storage.LastLogIndex())
+			log.Printf("replica=%s leaderCommitIndex=%d commitIndex=%d will apply uncommitted entries\n",
+				raft.ReplicaAddress(),
+				message.LeaderCommitIndex,
+				raft.mutableState.commitIndex,
+			)
+			if err := raft.applyUncommittedEntries(message.LeaderCommitIndex, raft.storage.LastLogIndex()); err != nil {
+				return fmt.Errorf("applying uncomitted entries: leaderCommitIndex=%d lastLogIndex=%d %w", message.LeaderCommitIndex, raft.storage.LastLogIndex(), err)
+			}
 		}
 
 		raft.mutableState.currentTermState.term = message.LeaderTerm
@@ -347,6 +373,7 @@ func (raft *Raft) handleMessages() {
 		log.Printf("replica=%s message=%+v handling RequestVote\n", raft.ReplicaAddress(), message)
 
 		replica := findReplicaByID(raft.config.Replicas, message.CandidateID)
+
 		// Receiver implementation:
 		// 1. Reply false if term < currentTerm (§5.1)
 		// 2. If votedFor is null or candidateId, and candidate’s log is at
@@ -357,7 +384,7 @@ func (raft *Raft) handleMessages() {
 				CurrentTerm: raft.mutableState.currentTermState.term,
 				VoteGranted: false,
 			})
-			return
+			return nil
 		}
 
 		alreadyVotedForCandidate := raft.hasVotedForCandidate(message.CandidateID)
@@ -388,7 +415,7 @@ func (raft *Raft) handleMessages() {
 		if message.CurrentTerm > raft.mutableState.currentTermState.term {
 			raft.newTerm(withTerm(message.CurrentTerm))
 			raft.transitionToState(Follower)
-			return
+			return nil
 		}
 
 		if message.VoteGranted {
@@ -401,6 +428,8 @@ func (raft *Raft) handleMessages() {
 	default:
 		panic(fmt.Sprintf("unexpected message: %+v", message))
 	}
+
+	return nil
 }
 
 func (raft *Raft) leaderElectionTimeoutFired() bool {
@@ -433,11 +462,21 @@ func (raft *Raft) hasVoted() bool {
 }
 
 func (raft *Raft) applyUncommittedEntries(leaderCommitIndex uint64, lastlogIndex uint64) error {
+	fmt.Printf("replica=%s leaderCommitIndex=%d lastLogIndex=%d applying uncomitted entries\n",
+		raft.ReplicaAddress(),
+		leaderCommitIndex,
+		lastlogIndex,
+	)
 	commitIndex := leaderCommitIndex
 	if lastlogIndex < leaderCommitIndex {
 		commitIndex = lastlogIndex
 	}
-	for i := raft.mutableState.commitIndex; i < commitIndex; i++ {
+
+	for i := raft.mutableState.commitIndex; i <= commitIndex; i++ {
+		if i == 0 {
+			continue
+		}
+
 		entry, err := raft.storage.GetEntryAtIndex(i)
 		if err != nil {
 			return fmt.Errorf("fetching entry at index: index=%d %w", i, err)

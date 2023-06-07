@@ -1,13 +1,44 @@
 package kv
 
-import "github.com/poorlydefinedbehaviour/raft-go/src/types"
+import (
+	"encoding/json"
+	"fmt"
 
-type KvStore struct{}
+	"github.com/poorlydefinedbehaviour/raft-go/src/types"
+)
 
-func NewKvStore() *KvStore {
-	return &KvStore{}
+const SetCommand uint8 = 1
+
+type setCommandEntry[K comparable, V any] struct {
+	Key   K `json:"key"`
+	Value V `json:"value"`
 }
 
-func (kv *KvStore) Apply(entry *types.Entry) error {
+type KvStore[K comparable, V any] struct {
+	items map[K]V
+}
+
+func NewKvStore[K comparable, V any]() *KvStore[K, V] {
+	return &KvStore[K, V]{items: make(map[K]V)}
+}
+
+func (kv *KvStore[K, V]) Apply(entry *types.Entry) error {
+	switch entry.Type {
+	case SetCommand:
+		var command setCommandEntry[K, V]
+		if err := json.Unmarshal(entry.Value, &command); err != nil {
+			return fmt.Errorf("unmarshaling set command: entry.Value=%s %w", string(entry.Value), err)
+		}
+
+		kv.items[command.Key] = command.Value
+	default:
+		return fmt.Errorf("unknown entry type: entry=%+v", *entry)
+	}
+
 	return nil
+}
+
+func (kv *KvStore[K, V]) Get(key K) (V, bool) {
+	value, ok := kv.items[key]
+	return value, ok
 }

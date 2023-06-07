@@ -17,7 +17,9 @@ type AppendEntriesInput struct {
 }
 
 type Entry struct {
-	Term uint64
+	Term  uint64
+	Type  uint8
+	Value []byte
 }
 
 func (*AppendEntriesInput) Message() {

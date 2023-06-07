@@ -145,10 +145,8 @@ func (network *Network) findPath(fromReplicaAddress, toReplicaAddress types.Repl
 			return path
 		}
 	}
-	fmt.Printf("\n\naaaaaaa fromReplicaAddress %+v\n\n", fromReplicaAddress)
-	fmt.Printf("\n\naaaaaaa toReplicaAddress %+v\n\n", toReplicaAddress)
-	fmt.Printf("\n\naaaaaaa network.networkPaths %+v\n\n", network.networkPaths)
-	panic("unreachable")
+
+	panic(fmt.Sprintf("unreachable: didn't find path. fromReplicaAddress=%s toReplicaAddress=%s networkPaths=%+v", fromReplicaAddress, toReplicaAddress, network.networkPaths))
 }
 
 func (network *Network) Receive(replicaAddress types.ReplicaAddress) (types.Message, error) {

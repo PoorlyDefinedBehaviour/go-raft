@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 )
 
@@ -52,29 +53,30 @@ func (storage *FileStorage) AppendEntries(entries []types.Entry) error {
 		storage.entries = append(storage.entries, entry)
 	}
 
-	fmt.Printf("\n\naaaaaaa storage.entries %+v\n\n", storage.entries)
 	return nil
 }
 
 func (storage *FileStorage) TruncateLogStartingFrom(index uint64) error {
-	fmt.Printf("\n\naaaaaaa truncate index %+v\n\n", index)
-	if index == 0 {
+	assert.True(index > 0, "storage is 1-indexed")
+
+	if index == 1 {
 		storage.entries = make([]types.Entry, 0)
 	} else {
-		storage.entries = storage.entries[:index]
+		storage.entries = storage.entries[:index-1]
 	}
-	fmt.Printf("\n\naaaaaaa storage.entries %+v\n\n", storage.entries)
+
 	return nil
 }
 
 func (storage *FileStorage) GetEntryAtIndex(index uint64) (*types.Entry, error) {
+	assert.True(index > 0, "storage is 1-indexed")
+
 	if index > uint64(len(storage.entries)) {
 		return nil, fmt.Errorf("index out of bounds: lastEntryIndex=%d index=%d %w", len(storage.entries), index, ErrIndexOutOfBounds)
 	}
 
 	// Index is 1-based.
 	return &storage.entries[index-1], nil
-
 }
 
 func (storage *FileStorage) LastLogIndex() uint64 {
