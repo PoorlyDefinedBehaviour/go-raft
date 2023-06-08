@@ -25,6 +25,18 @@ type TestReplica struct {
 	Kv *kv.KvStore
 }
 
+func (cluster *Cluster) Followers() []TestReplica {
+	replicas := make([]TestReplica, 0)
+
+	for _, replica := range cluster.Replicas {
+		if replica.State() != Leader {
+			replicas = append(replicas, replica)
+		}
+	}
+
+	return replicas
+}
+
 func (cluster *Cluster) MustWaitForLeader() TestReplica {
 	const maxTicks = 10_100
 
@@ -94,10 +106,11 @@ func Setup() Cluster {
 		}
 
 		config := Config{
-			ReplicaID:             uint16(i + 1),
-			ReplicaAddress:        replicaAddress,
-			Replicas:              configReplicas,
-			LeaderElectionTimeout: 10 * time.Second,
+			ReplicaID:              uint16(i + 1),
+			ReplicaAddress:         replicaAddress,
+			Replicas:               configReplicas,
+			LeaderElectionTimeout:  300 * time.Millisecond,
+			LeaderHeartbeatTimeout: 100 * time.Millisecond,
 		}
 
 		kv := kv.NewKvStore(bus)

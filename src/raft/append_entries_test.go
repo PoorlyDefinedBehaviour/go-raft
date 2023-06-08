@@ -50,7 +50,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		assert.Equal(t, uint64(0), response.PreviousLogTerm)
 	})
 
-	t.Run("leader message previous log index indes is not the same as the replicas last log index, success=false", func(t *testing.T) {
+	t.Run("leader message previous log index is not the same as the replicas last log index, success=false", func(t *testing.T) {
 		t.Parallel()
 
 		env := Setup()
