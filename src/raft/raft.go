@@ -177,6 +177,7 @@ func (raft *Raft) Tick() {
 	switch raft.mutableState.state {
 	case Follower:
 		if raft.leaderElectionTimeoutFired() {
+			raft.logger.Debugf("tick=%d follower: election timeout fired", raft.mutableState.currentTick)
 			raft.transitionToState(Candidate)
 			return
 		}
@@ -185,6 +186,7 @@ func (raft *Raft) Tick() {
 		}
 	case Candidate:
 		if raft.leaderElectionTimeoutFired() {
+			raft.logger.Debugf("tick=%d candidate: election timeout fired", raft.mutableState.currentTick)
 			if err := raft.startElection(); err != nil {
 				raft.logger.Debugf("error starting election: %s", err.Error())
 			}
@@ -195,6 +197,7 @@ func (raft *Raft) Tick() {
 		}
 	case Leader:
 		if raft.leaderHeartbeatTimeoutFired() {
+			raft.logger.Debugf("tick=%d leader: heartbeat timeout fired", raft.mutableState.currentTick)
 			// Send heartbeat with empty entries.
 			raft.sendAppendEntries(make([]types.Entry, 0))
 			raft.resetLeaderHeartbeatTimeout()

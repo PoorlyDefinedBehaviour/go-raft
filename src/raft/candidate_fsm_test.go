@@ -61,7 +61,7 @@ func TestCandidateFSM(t *testing.T) {
 		replica.Tick()
 
 		t.Run("candidate starts a new term", func(t *testing.T) {
-			assert.True(t, termBeforeElection < replica.mutableState.currentTermState.term)
+			assert.Equal(t, termBeforeElection+1, replica.mutableState.currentTermState.term)
 		})
 
 		t.Run("candidate votes for itself", func(t *testing.T) {
@@ -82,7 +82,7 @@ func TestCandidateFSM(t *testing.T) {
 			termBeforeElection := replica.mutableState.currentTermState.term
 
 			// Tick until the timeout fires.
-			timeoutAtTick := replica.mutableState.nextLeaderElectionTimeout + 1
+			timeoutAtTick := replica.mutableState.nextLeaderElectionTimeout + 1 - replica.mutableState.currentTick
 			for i := uint64(0); i < timeoutAtTick; i++ {
 				replica.Tick()
 			}
@@ -90,20 +90,20 @@ func TestCandidateFSM(t *testing.T) {
 			replica.Tick()
 
 			// Term is incremented every new election.
-			assert.True(t, termBeforeElection < replica.mutableState.nextLeaderElectionTimeout)
+			assert.Equal(t, termBeforeElection+1, replica.mutableState.currentTermState.term)
 		})
 
 		t.Run("current election timeout, starts new election", func(t *testing.T) {
 			termBeforeElection := replica.mutableState.currentTermState.term
 
 			// Tick until the timeout fires again.
-			timeoutAtTick := replica.mutableState.nextLeaderElectionTimeout + 1
+			timeoutAtTick := replica.mutableState.nextLeaderElectionTimeout + 1 - replica.mutableState.currentTick
 			for i := uint64(0); i < timeoutAtTick; i++ {
 				replica.Tick()
 			}
 
 			// New election, new term.
-			assert.True(t, termBeforeElection < replica.mutableState.nextLeaderElectionTimeout)
+			assert.Equal(t, termBeforeElection+1, replica.mutableState.currentTermState.term)
 		})
 	})
 }
