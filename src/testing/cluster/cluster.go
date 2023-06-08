@@ -1,16 +1,16 @@
-package raft
+package cluster
 
 import (
 	"time"
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/kv"
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
-	"go.uber.org/zap"
-
+	"github.com/poorlydefinedbehaviour/raft-go/src/raft"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
 	"github.com/poorlydefinedbehaviour/raft-go/src/storage"
 	"github.com/poorlydefinedbehaviour/raft-go/src/testing/network"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
+	"go.uber.org/zap"
 )
 
 type Cluster struct {
@@ -21,21 +21,30 @@ type Cluster struct {
 }
 
 type TestReplica struct {
-	*Raft
+	*raft.Raft
 	Kv *kv.KvStore
 }
 
-func (cluster *Cluster) MustWaitForLeader() TestReplica {
+func (cluster *Cluster) MustWaitForLeader() *TestReplica {
 	const maxTicks = 10_100
 
 	for i := 0; i < maxTicks; i++ {
 		cluster.Tick()
 		if leader := cluster.Leader(); leader != nil {
-			return *leader
+			return leader
 		}
 	}
 
 	panic("unable to elect a leader in time")
+}
+
+func (cluster *Cluster) Start() {
+	for {
+		select {
+		case <-time.After(1 * time.Millisecond):
+			cluster.Tick()
+		}
+	}
 }
 
 func (cluster *Cluster) Tick() {
@@ -43,13 +52,13 @@ func (cluster *Cluster) Tick() {
 	cluster.Network.Tick()
 
 	for _, replica := range cluster.Replicas {
-		replica.Raft.Tick()
+		replica.Tick()
 	}
 }
 
 func (cluster *Cluster) Leader() *TestReplica {
 	for _, replica := range cluster.Replicas {
-		if replica.Raft.State() == Leader {
+		if replica.Raft.State() == raft.Leader {
 			return &replica
 		}
 	}
@@ -58,7 +67,7 @@ func (cluster *Cluster) Leader() *TestReplica {
 }
 
 func Setup() Cluster {
-	log, err := zap.NewDevelopment(zap.WithCaller(true))
+	log, err := zap.NewProduction(zap.WithCaller(true))
 	if err != nil {
 		panic(err)
 	}
@@ -84,16 +93,16 @@ func Setup() Cluster {
 	replicas := make([]TestReplica, 0)
 
 	for i, replicaAddress := range replicaAddresses {
-		configReplicas := make([]Replica, 0)
+		configReplicas := make([]raft.Replica, 0)
 
 		for j, otherReplicaAddress := range replicaAddresses {
 			if replicaAddress == otherReplicaAddress {
 				continue
 			}
-			configReplicas = append(configReplicas, Replica{ReplicaID: uint16(j + 1), ReplicaAddress: otherReplicaAddress})
+			configReplicas = append(configReplicas, raft.Replica{ReplicaID: uint16(j + 1), ReplicaAddress: otherReplicaAddress})
 		}
 
-		config := Config{
+		config := raft.Config{
 			ReplicaID:             uint16(i + 1),
 			ReplicaAddress:        replicaAddress,
 			Replicas:              configReplicas,
@@ -101,7 +110,7 @@ func Setup() Cluster {
 		}
 
 		kv := kv.NewKvStore(bus)
-		raft, err := NewRaft(config, bus, storage, kv, logger)
+		raft, err := raft.NewRaft(config, bus, storage, kv, logger)
 		if err != nil {
 			panic(err)
 		}

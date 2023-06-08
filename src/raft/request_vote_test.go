@@ -13,7 +13,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 	t.Run("candidate's term is less than the replica's term, should not grant vote", func(t *testing.T) {
 		t.Parallel()
 
-		env := setup()
+		env := Setup()
 
 		candidate := env.Replicas[0]
 		replica := env.Replicas[1]
@@ -44,7 +44,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 	t.Run("candidate's log is smaller than the replica's log, should not grante vote", func(t *testing.T) {
 		t.Parallel()
 
-		env := setup()
+		env := Setup()
 
 		candidate := env.Replicas[0]
 		replica := env.Replicas[1]
@@ -75,7 +75,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 	t.Run("candidate last log term is smaller than the replica's last log term, should not grant vote", func(t *testing.T) {
 		t.Parallel()
 
-		env := setup()
+		env := Setup()
 
 		candidate := env.Replicas[0]
 		replica := env.Replicas[1]
@@ -106,7 +106,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 	t.Run("candidate log is up to date and replica has not voted yet, should grant vote", func(t *testing.T) {
 		t.Parallel()
 
-		env := setup()
+		env := Setup()
 
 		candidate := env.Replicas[0]
 		replica := env.Replicas[1]
@@ -135,7 +135,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 	t.Run("candidate log is up to date and replica has already voted for the candidate, should grant vote to same candidate again", func(t *testing.T) {
 		t.Parallel()
 
-		env := setup()
+		env := Setup()
 
 		candidate := env.Replicas[0]
 		replica := env.Replicas[1]
@@ -166,7 +166,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 	t.Run("candidate log is up to date but replica voted for another candidate already, should not grant vote", func(t *testing.T) {
 		t.Parallel()
 
-		env := setup()
+		env := Setup()
 
 		candidateA := env.Replicas[0]
 		candidateB := env.Replicas[1]

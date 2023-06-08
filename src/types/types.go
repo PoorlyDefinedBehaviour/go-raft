@@ -7,6 +7,16 @@ type Message interface {
 	Message()
 }
 
+type UserRequestInput struct {
+	Type   uint8
+	Value  []byte
+	DoneCh chan error
+}
+
+func (*UserRequestInput) Message() {
+	panic("unimplemented")
+}
+
 type AppendEntriesInput struct {
 	LeaderID          ReplicaID
 	LeaderTerm        uint64
@@ -63,5 +73,5 @@ type Network interface {
 }
 
 type StateMachine interface {
-	Apply(entry *Entry) error
+	Apply(*Entry) error
 }

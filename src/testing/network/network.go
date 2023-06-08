@@ -3,8 +3,10 @@ package network
 import (
 	"fmt"
 
+	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
+	"go.uber.org/zap"
 )
 
 type NetworkConfig struct {
@@ -17,6 +19,8 @@ type NetworkConfig struct {
 
 type Network struct {
 	config NetworkConfig
+
+	logger *zap.SugaredLogger
 
 	rand rand.Random
 
@@ -55,13 +59,16 @@ type MessageToSend struct {
 	Index              int
 }
 
-func NewNetwork(config NetworkConfig, rand rand.Random, replicaAddresses []types.ReplicaAddress) *Network {
+func NewNetwork(config NetworkConfig, logger *zap.SugaredLogger, rand rand.Random, replicaAddresses []types.ReplicaAddress) *Network {
+	assert.True(len(replicaAddresses) > 0, "replica addresses cannot be empty")
+
 	return &Network{
 		config:                config,
 		rand:                  rand,
 		networkPaths:          buildNetworkPaths(replicaAddresses),
 		sendMessageQueue:      make(PriorityQueue, 0),
 		toDeliverMessageQueue: make(map[types.ReplicaAddress][]types.Message, 0),
+		logger:                logger,
 	}
 }
 
@@ -82,7 +89,6 @@ func buildNetworkPaths(replicasAddresses []types.ReplicaAddress) []NetworkPath {
 }
 
 func (network *Network) Send(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.Message) {
-
 	messageToSend := &MessageToSend{
 		AfterTick:          network.randomDelay(),
 		FromReplicaAddress: fromReplicaAddress,

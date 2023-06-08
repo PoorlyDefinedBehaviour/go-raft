@@ -15,7 +15,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 	t.Run("leader term is smaller than the replica term, success=false", func(t *testing.T) {
 		t.Parallel()
 
-		env := setup()
+		env := Setup()
 
 		leader := env.Replicas[0]
 		replica := env.Replicas[1]
@@ -53,7 +53,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 	t.Run("leader message previous log index indes is not the same as the replicas last log index, success=false", func(t *testing.T) {
 		t.Parallel()
 
-		env := setup()
+		env := Setup()
 
 		leader := env.Replicas[0]
 		replica := env.Replicas[1]
@@ -89,7 +89,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 	t.Run("replica entry conflicts with leader entry in the same index, should truncate the replica log", func(t *testing.T) {
 		t.Parallel()
 
-		env := setup()
+		env := Setup()
 
 		leader := env.Replicas[0]
 		replica := env.Replicas[1]
@@ -137,7 +137,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 	t.Run("appends entries to the log, success=true", func(t *testing.T) {
 		t.Parallel()
 
-		env := setup()
+		env := Setup()
 
 		leader := env.Replicas[0]
 		replica := env.Replicas[1]
@@ -176,16 +176,16 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 	t.Run("leader commit index is greater than the replica commit index, should apply entries to state machine", func(t *testing.T) {
 		t.Parallel()
 
-		env := setup()
+		env := Setup()
 
 		leader := env.Replicas[0]
 		replica := env.Replicas[1]
 
 		leader.newTerm(withTerm(1))
 
-		entryValue, err := json.Marshal(map[string]string{
+		entryValue, err := json.Marshal(map[string]any{
 			"key":   "key1",
-			"value": "value1",
+			"value": []byte("value1"),
 		})
 		assert.NoError(t, err)
 
@@ -253,7 +253,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		// First entry has been applied.
 		value, ok := replica.Kv.Get("key1")
 		assert.True(t, ok)
-		assert.Equal(t, "value1", value)
+		assert.Equal(t, []byte("value1"), value)
 
 		// Second entry has not been applied yet.
 		_, ok = replica.Kv.Get("key2")
