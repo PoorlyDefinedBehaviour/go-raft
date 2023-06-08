@@ -7,6 +7,7 @@ import (
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
+	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
 	"github.com/poorlydefinedbehaviour/raft-go/src/storage"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 	"go.uber.org/zap"
@@ -33,7 +34,11 @@ type Raft struct {
 	// The state machine being built on top of raft.
 	stateMachine types.StateMachine
 
+	// Long term storage.
 	storage storage.Storage
+
+	// Random number generator.
+	rand rand.Random
 
 	logger *zap.SugaredLogger
 }
@@ -91,7 +96,7 @@ type Replica struct {
 	ReplicaAddress types.ReplicaAddress
 }
 
-func NewRaft(config Config, messageBus *messagebus.MessageBus, storage storage.Storage, stateMachine types.StateMachine, logger *zap.SugaredLogger) (*Raft, error) {
+func NewRaft(config Config, messageBus *messagebus.MessageBus, storage storage.Storage, stateMachine types.StateMachine, rand rand.Random, logger *zap.SugaredLogger) (*Raft, error) {
 	if config.ReplicaID == 0 {
 		return nil, fmt.Errorf("replica id cannot be 0")
 	}
@@ -124,6 +129,7 @@ func NewRaft(config Config, messageBus *messagebus.MessageBus, storage storage.S
 			nextLeaderElectionTimeout:  0,
 			nextLeaderHeartbeatTimeout: 0,
 		},
+		rand:   rand,
 		logger: logger,
 	}
 	raft.logger = logger.With("replica", raft.ReplicaAddress())
@@ -443,11 +449,13 @@ func (raft *Raft) handleMessages() error {
 		candidateLogUpToDate := raft.isCandidateLogUpToDate(message)
 		voteGranted := alreadyVotedForCandidate || (!hasVoted && candidateLogUpToDate)
 
-		raft.logger.Debugf("voteGranted=%v alreadyVotedForCandidate=%v hasVoted=%v candidateLogUpToDate=%v",
+		raft.logger.Debugf("candidateID=%d voteGranted=%v alreadyVotedForCandidate=%v hasVoted=%v candidateLogUpToDate=%v votedFor=%d",
+			message.CandidateID,
 			voteGranted,
 			alreadyVotedForCandidate,
 			hasVoted,
 			candidateLogUpToDate,
+			raft.mutableState.currentTermState.votedFor,
 		)
 
 		if voteGranted {

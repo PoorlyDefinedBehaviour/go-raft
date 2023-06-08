@@ -38,7 +38,7 @@ func (cluster *Cluster) Followers() []TestReplica {
 }
 
 func (cluster *Cluster) MustWaitForLeader() TestReplica {
-	const maxTicks = 10_100
+	const maxTicks = 350
 
 	for i := 0; i < maxTicks; i++ {
 		cluster.Tick()
@@ -114,7 +114,7 @@ func Setup() Cluster {
 		}
 
 		kv := kv.NewKvStore(bus)
-		raft, err := NewRaft(config, bus, storage, kv, logger)
+		raft, err := NewRaft(config, bus, storage, kv, rand.NewRand(0), logger)
 		if err != nil {
 			panic(err)
 		}

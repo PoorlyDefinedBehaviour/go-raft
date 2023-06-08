@@ -34,7 +34,7 @@ func TestSimulate(t *testing.T) {
 	if err != nil {
 		panic(fmt.Errorf("generating seed: %w", err))
 	}
-	seed := bigint.Uint64()
+	seed := bigint.Int64()
 
 	rand := rand.NewRand(seed)
 
@@ -57,10 +57,11 @@ func TestSimulate(t *testing.T) {
 
 	for i := 1; i <= numReplicas; i++ {
 		config := raft.Config{
-			ReplicaID:             uint16(i),
-			ReplicaAddress:        fmt.Sprintf("localhost:800%d", i),
-			LeaderElectionTimeout: 10 * time.Second,
-			Replicas:              make([]raft.Replica, 0),
+			ReplicaID:              uint16(i),
+			ReplicaAddress:         fmt.Sprintf("localhost:800%d", i),
+			LeaderElectionTimeout:  300 * time.Millisecond,
+			LeaderHeartbeatTimeout: 100 * time.Millisecond,
+			Replicas:               make([]raft.Replica, 0),
 		}
 		for j := 1; j <= numReplicas; j++ {
 			if i == j {
@@ -73,7 +74,7 @@ func TestSimulate(t *testing.T) {
 			})
 		}
 		bus := messagebus.NewMessageBus(network)
-		raft, err := raft.NewRaft(config, bus, storage.NewFileStorage(), kv.NewKvStore(bus), logger)
+		raft, err := raft.NewRaft(config, bus, storage.NewFileStorage(), kv.NewKvStore(bus), rand, logger)
 		assert.NoError(t, err)
 		replicas = append(replicas, raft)
 	}

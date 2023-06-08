@@ -111,7 +111,7 @@ func Setup() Cluster {
 		}
 
 		kv := kv.NewKvStore(bus)
-		raft, err := raft.NewRaft(config, bus, storage, kv, logger)
+		raft, err := raft.NewRaft(config, bus, storage, kv, rand.NewRand(0), logger)
 		if err != nil {
 			panic(err)
 		}
