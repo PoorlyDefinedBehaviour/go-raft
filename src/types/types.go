@@ -48,7 +48,7 @@ func (*AppendEntriesOutput) Message() {
 }
 
 type RequestVoteInput struct {
-	CandidateID           uint16
+	CandidateID           ReplicaID
 	CandidateTerm         uint64
 	CandidateLastLogIndex uint64
 	CandidateLastLogTerm  uint64
@@ -59,6 +59,7 @@ func (*RequestVoteInput) Message() {
 }
 
 type RequestVoteOutput struct {
+	ReplicaID   ReplicaID
 	CurrentTerm uint64
 	VoteGranted bool
 }

@@ -57,11 +57,12 @@ func TestSimulate(t *testing.T) {
 
 	for i := 1; i <= numReplicas; i++ {
 		config := raft.Config{
-			ReplicaID:              uint16(i),
-			ReplicaAddress:         fmt.Sprintf("localhost:800%d", i),
-			LeaderElectionTimeout:  300 * time.Millisecond,
-			LeaderHeartbeatTimeout: 100 * time.Millisecond,
-			Replicas:               make([]raft.Replica, 0),
+			ReplicaID:                uint16(i),
+			ReplicaAddress:           fmt.Sprintf("localhost:800%d", i),
+			MaxLeaderElectionTimeout: 300 * time.Millisecond,
+			MinLeaderElectionTimeout: 100 * time.Millisecond,
+			LeaderHeartbeatTimeout:   100 * time.Millisecond,
+			Replicas:                 make([]raft.Replica, 0),
 		}
 		for j := 1; j <= numReplicas; j++ {
 			if i == j {

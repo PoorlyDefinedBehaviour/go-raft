@@ -103,11 +103,12 @@ func Setup() Cluster {
 		}
 
 		config := raft.Config{
-			ReplicaID:              uint16(i + 1),
-			ReplicaAddress:         replicaAddress,
-			Replicas:               configReplicas,
-			LeaderElectionTimeout:  300 * time.Millisecond,
-			LeaderHeartbeatTimeout: 100 * time.Millisecond,
+			ReplicaID:                uint16(i + 1),
+			ReplicaAddress:           replicaAddress,
+			Replicas:                 configReplicas,
+			MaxLeaderElectionTimeout: 300 * time.Millisecond,
+			MinLeaderElectionTimeout: 100 * time.Millisecond,
+			LeaderHeartbeatTimeout:   100 * time.Millisecond,
 		}
 
 		kv := kv.NewKvStore(bus)

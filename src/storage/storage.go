@@ -25,6 +25,9 @@ type Storage interface {
 	// 1-based indexing. First entry starts at 1.
 	GetEntryAtIndex(index uint64) (*types.Entry, error)
 
+	// 1-based indexing.
+	GetBatch(startingIndex uint64, batchSized uint64) ([]types.Entry, error)
+
 	// 1-based indexing. First entry starts at 1. 0 means empty.
 	LastLogIndex() uint64
 
@@ -77,6 +80,27 @@ func (storage *FileStorage) GetEntryAtIndex(index uint64) (*types.Entry, error) 
 
 	// Index is 1-based.
 	return &storage.entries[index-1], nil
+}
+
+func (storage *FileStorage) GetBatch(startingIndex uint64, batchSize uint64) ([]types.Entry, error) {
+	assert.True(startingIndex > 0, "storage is 1-indexed")
+
+	out := make([]types.Entry, 0, batchSize)
+
+	for i := 0; i < int(batchSize); i++ {
+		index := startingIndex + uint64(i)
+
+		entry, err := storage.GetEntryAtIndex(index)
+		if errors.Is(err, ErrIndexOutOfBounds) {
+			return out, nil
+		}
+		if err != nil {
+			return out, fmt.Errorf("fetching entry at index: index=%d %w", index, err)
+		}
+		out = append(out, *entry)
+	}
+
+	return out, nil
 }
 
 func (storage *FileStorage) LastLogIndex() uint64 {

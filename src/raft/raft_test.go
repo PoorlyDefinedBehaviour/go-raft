@@ -37,13 +37,24 @@ func (cluster *Cluster) Followers() []TestReplica {
 	return replicas
 }
 
+func (cluster *Cluster) MustWaitForCandidate() TestReplica {
+	return cluster.mustWaitForReplicaWithStatus(Candidate)
+}
+
 func (cluster *Cluster) MustWaitForLeader() TestReplica {
+	return cluster.mustWaitForReplicaWithStatus(Leader)
+}
+
+func (cluster *Cluster) mustWaitForReplicaWithStatus(state State) TestReplica {
 	const maxTicks = 350
 
 	for i := 0; i < maxTicks; i++ {
 		cluster.Tick()
-		if leader := cluster.Leader(); leader != nil {
-			return *leader
+
+		for _, replica := range cluster.Replicas {
+			if replica.State() == state {
+				return replica
+			}
 		}
 	}
 
@@ -106,11 +117,12 @@ func Setup() Cluster {
 		}
 
 		config := Config{
-			ReplicaID:              uint16(i + 1),
-			ReplicaAddress:         replicaAddress,
-			Replicas:               configReplicas,
-			LeaderElectionTimeout:  300 * time.Millisecond,
-			LeaderHeartbeatTimeout: 100 * time.Millisecond,
+			ReplicaID:                uint16(i + 1),
+			ReplicaAddress:           replicaAddress,
+			Replicas:                 configReplicas,
+			MaxLeaderElectionTimeout: 300 * time.Millisecond,
+			MinLeaderElectionTimeout: 100 * time.Millisecond,
+			LeaderHeartbeatTimeout:   100 * time.Millisecond,
 		}
 
 		kv := kv.NewKvStore(bus)

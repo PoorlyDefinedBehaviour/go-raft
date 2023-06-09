@@ -27,10 +27,11 @@ func TestLeaderElectionTimeoutFired(t *testing.T) {
 		{
 			description: "leader election timeout is set to a tick greater than the current tick, should return false",
 			config: Config{
-				ReplicaID:              1,
-				ReplicaAddress:         "localhost:8001",
-				LeaderElectionTimeout:  300 * time.Millisecond,
-				LeaderHeartbeatTimeout: 100 * time.Millisecond,
+				ReplicaID:                1,
+				ReplicaAddress:           "localhost:8001",
+				MaxLeaderElectionTimeout: 300 * time.Millisecond,
+				MinLeaderElectionTimeout: 100 * time.Millisecond,
+				LeaderHeartbeatTimeout:   100 * time.Millisecond,
 			},
 			initialCurrentTick: 0,
 			expected:           false,
@@ -38,10 +39,11 @@ func TestLeaderElectionTimeoutFired(t *testing.T) {
 		{
 			description: "leader election timeout is set to a tick smaller than the current tick, should return true",
 			config: Config{
-				ReplicaID:              1,
-				ReplicaAddress:         "localhost:8001",
-				LeaderElectionTimeout:  300 * time.Millisecond,
-				LeaderHeartbeatTimeout: 100 * time.Millisecond,
+				ReplicaID:                1,
+				ReplicaAddress:           "localhost:8001",
+				MaxLeaderElectionTimeout: 300 * time.Millisecond,
+				MinLeaderElectionTimeout: 100 * time.Millisecond,
+				LeaderHeartbeatTimeout:   100 * time.Millisecond,
 			},
 			initialCurrentTick: 5001,
 			expected:           true,
@@ -68,7 +70,7 @@ func TestLeaderElection(t *testing.T) {
 
 			replica := cluster.Replicas[0]
 
-			for i := 0; i < int(replica.config.LeaderElectionTimeout.Milliseconds())+100; i++ {
+			for i := 0; i < int(replica.config.MaxLeaderElectionTimeout.Milliseconds())+100; i++ {
 				cluster.Tick()
 			}
 

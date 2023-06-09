@@ -52,11 +52,11 @@ func newNetworkPath(fromReplicaAddress, toReplicaAddress types.ReplicaAddress) N
 }
 
 type MessageToSend struct {
-	AfterTick          uint64
-	FromReplicaAddress types.ReplicaAddress
-	ToReplicaAddress   types.ReplicaAddress
-	Message            types.Message
-	Index              int
+	CanBeDeliveredAtTick uint64
+	FromReplicaAddress   types.ReplicaAddress
+	ToReplicaAddress     types.ReplicaAddress
+	Message              types.Message
+	Index                int
 }
 
 func NewNetwork(config NetworkConfig, logger *zap.SugaredLogger, rand rand.Random, replicaAddresses []types.ReplicaAddress) *Network {
@@ -90,10 +90,10 @@ func buildNetworkPaths(replicasAddresses []types.ReplicaAddress) []NetworkPath {
 
 func (network *Network) Send(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.Message) {
 	messageToSend := &MessageToSend{
-		AfterTick:          network.randomDelay(),
-		FromReplicaAddress: fromReplicaAddress,
-		ToReplicaAddress:   toReplicaAddress,
-		Message:            message,
+		CanBeDeliveredAtTick: network.randomDelay(),
+		FromReplicaAddress:   fromReplicaAddress,
+		ToReplicaAddress:     toReplicaAddress,
+		Message:              message,
 	}
 
 	network.sendMessageQueue.Push(messageToSend)
@@ -115,7 +115,8 @@ func (network *Network) Tick() {
 
 	for len(network.sendMessageQueue) > 0 {
 		oldestMessage := network.sendMessageQueue.Pop().(*MessageToSend)
-		if oldestMessage.AfterTick > network.ticks {
+
+		if oldestMessage.CanBeDeliveredAtTick > network.ticks {
 			network.sendMessageQueue.Push(oldestMessage)
 			return
 		}
@@ -123,7 +124,7 @@ func (network *Network) Tick() {
 		networkPath := network.findPath(oldestMessage.FromReplicaAddress, oldestMessage.ToReplicaAddress)
 		if networkPath.makeReachableAfterTick > network.ticks {
 			network.sendMessageQueue.Push(oldestMessage)
-			return
+			continue
 		}
 
 		shouldDrop := network.rand.GenBool(network.config.DropMessageProbability)
@@ -131,12 +132,10 @@ func (network *Network) Tick() {
 			continue
 		}
 
-		if oldestMessage.AfterTick < network.ticks {
-			if network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] == nil {
-				network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] = make([]types.Message, 0)
-			}
-			network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] = append(network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress], oldestMessage.Message)
+		if network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] == nil {
+			network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] = make([]types.Message, 0)
 		}
+		network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] = append(network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress], oldestMessage.Message)
 
 		shouldReplay := network.rand.GenBool(network.config.MessageReplayProbability)
 		if shouldReplay {

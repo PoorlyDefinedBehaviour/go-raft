@@ -13,7 +13,7 @@ func (pq PriorityQueue) Len() int { return len(pq) }
 
 func (pq PriorityQueue) Less(i, j int) bool {
 	// We want Pop to give us the lowest, priority so we use lowest than here.
-	return pq[i].AfterTick < pq[j].AfterTick
+	return pq[i].CanBeDeliveredAtTick < pq[j].CanBeDeliveredAtTick
 }
 
 func (pq PriorityQueue) Swap(i, j int) {
@@ -42,6 +42,6 @@ func (pq *PriorityQueue) Pop() any {
 // update modifies the priority and value of an Item in the queue.
 func (pq *PriorityQueue) update(item *MessageToSend, message types.Message, priority int) {
 	item.Message = message
-	item.AfterTick = uint64(priority)
+	item.CanBeDeliveredAtTick = uint64(priority)
 	heap.Fix(pq, item.Index)
 }
