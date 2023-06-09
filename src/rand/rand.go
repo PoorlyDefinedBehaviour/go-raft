@@ -23,7 +23,7 @@ func NewRand(seed int64) *DefaultRandom {
 
 // Generates a boolean with probability `p` of it being true.
 func (rand *DefaultRandom) GenBool(p float64) bool {
-	return p < rand.rand.Float64()
+	return rand.rand.Float64() < p
 }
 
 func (rand *DefaultRandom) GenBetween(min, max uint64) uint64 {
