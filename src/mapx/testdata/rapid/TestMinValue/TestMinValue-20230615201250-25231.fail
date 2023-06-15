@@ -1,0 +1,32 @@
+# 2023/06/15 20:12:50.319942 [TestMinValue] [rapid] draw input: []int64{0, 759182}
+# 2023/06/15 20:12:50.320063 [TestMinValue] 
+# 	Error Trace:	/Users/brunofelipefrancisco/dev/go-raft/src/mapx/mapx_test.go:31
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:367
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:376
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:202
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:117
+# 	            				/Users/brunofelipefrancisco/dev/go-raft/src/mapx/mapx_test.go:13
+# 	Error:      	Should be true
+# 	Test:       	TestMinValue
+# 2023/06/15 20:12:50.320208 [TestMinValue] 
+# 	Error Trace:	/Users/brunofelipefrancisco/dev/go-raft/src/mapx/mapx_test.go:32
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:367
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:376
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:202
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:117
+# 	            				/Users/brunofelipefrancisco/dev/go-raft/src/mapx/mapx_test.go:13
+# 	Error:      	Not equal: 
+# 	            	expected: int64(0)
+# 	            	actual  : *int64((*int64)(nil))
+# 	Test:       	TestMinValue
+# 
+v0.4.8#774989930952468451
+0x1e0e1a2ddf81af
+0xed45d2500d636
+0xad02a4a4ca762
+0x0
+0xa51857b4edfb9
+0x6bb2f5f0327dc
+0x17c67969da7eeb
+0xb958e
+0x4a98aef4296f5

@@ -1,26 +1,30 @@
 package mapx
 
-import "golang.org/x/exp/constraints"
+import (
+	"golang.org/x/exp/constraints"
+)
 
-func anyKey[K comparable, V constraints.Ordered](m map[K]V) (*K, bool) {
+func anyKey[K comparable, V constraints.Ordered](m map[K]V) (K, bool) {
 	for key := range m {
-		return &key, true
+		return key, true
 	}
-	return nil, false
+	var key K
+	return key, false
 }
 
-func MinValue[K comparable, V constraints.Ordered](m map[K]V) (*V, bool) {
+func MinValue[K comparable, V constraints.Ordered](m map[K]V) (V, bool) {
 	key, ok := anyKey(m)
 	if !ok {
-		return nil, false
+		var value V
+		return value, false
 	}
 
-	minValue := m[*key]
-	min := &minValue
+	minValue := m[key]
+	min := minValue
 
 	for _, value := range m {
-		if value < *min {
-			min = &value
+		if value < min {
+			min = value
 		}
 	}
 
