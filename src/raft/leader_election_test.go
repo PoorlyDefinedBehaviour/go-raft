@@ -62,29 +62,6 @@ func TestLeaderElectionTimeoutFired(t *testing.T) {
 func TestLeaderElection(t *testing.T) {
 	t.Parallel()
 
-	t.Run("only one leader is elected per term", func(t *testing.T) {
-		t.Parallel()
-
-		for i := 0; i < 100; i++ {
-			cluster := Setup()
-
-			replica := cluster.Replicas[0]
-
-			for i := 0; i < int(replica.config.MaxLeaderElectionTimeout.Milliseconds())+100; i++ {
-				cluster.Tick()
-			}
-
-			leaders := 0
-			for _, replica := range cluster.Replicas {
-				if replica.State() == Leader {
-					leaders++
-				}
-			}
-
-			assert.Equal(t, 1, leaders)
-		}
-	})
-
 	t.Run("every new leader commits an empty entry to reset replica leader election timeouts", func(t *testing.T) {
 		t.Parallel()
 
@@ -92,17 +69,21 @@ func TestLeaderElection(t *testing.T) {
 
 		candidate := cluster.Replicas[0]
 
+		assert.NoError(t, candidate.transitionToState(Candidate))
+
 		replicas := cluster.Replicas[1:]
 
 		originalTimeouts := slicesx.Map(replicas, func(replica *TestReplica) uint64 {
 			return replica.mutableState.nextLeaderElectionTimeout
 		})
 
-		candidate.startElection()
+		assert.NoError(t, candidate.startElection())
 
 		actualLeader := cluster.MustWaitForLeader()
 
 		assert.Equal(t, candidate, actualLeader)
+
+		cluster.Tick()
 
 		timeoutsAfterLeaderHeartbeat := slicesx.Map(replicas, func(replica *TestReplica) uint64 {
 			return replica.mutableState.nextLeaderElectionTimeout

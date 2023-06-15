@@ -35,7 +35,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 
 		env.Network.Tick()
 
-		replica.handleMessages()
+		assert.NoError(t, replica.handleMessages())
 
 		env.Network.Tick()
 
@@ -58,7 +58,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		leader := env.Replicas[0]
 		replica := env.Replicas[1]
 
-		leader.newTerm(withTerm(1))
+		assert.NoError(t, leader.newTerm(withTerm(1)))
 
 		appendEntriesInput := types.AppendEntriesInput{
 			LeaderID:          leader.config.ReplicaID,
@@ -86,7 +86,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		assert.Equal(t, uint64(0), response.PreviousLogIndex)
 	})
 
-	t.Run("replica entry conflicts with leader entry in the same index, should truncate the replica log", func(t *testing.T) {
+	t.Run("replica entry has entry with a different term at index, should truncate replica's log", func(t *testing.T) {
 		t.Parallel()
 
 		env := Setup()
@@ -95,7 +95,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		replica := env.Replicas[1]
 
 		// The last log entry is at term 0 in the replica.
-		assert.NoError(t, env.Storage.AppendEntries([]types.Entry{
+		assert.NoError(t, replica.storage.AppendEntries([]types.Entry{
 			{
 				Term: 0,
 			},
@@ -104,12 +104,14 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 			},
 		}))
 
+		// Leader sends an AppendEntries request.
 		env.Bus.SendAppendEntriesRequest(leader.ReplicaAddress(), replica.ReplicaAddress(), types.AppendEntriesInput{
 			LeaderID:          leader.config.ReplicaID,
 			LeaderTerm:        2,
 			LeaderCommitIndex: 0,
 			PreviousLogIndex:  2,
-			// The leader thinks the last log is at term 1.
+			// The leader thinks the entry at index 2 is at term 1 but
+			// the replica thinks the entry at index 2 is at term 0.
 			PreviousLogTerm: 1,
 			Entries: []types.Entry{
 				{
@@ -120,18 +122,25 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 
 		env.Network.Tick()
 
-		replica.handleMessages()
+		replica.Tick()
 
+		// Entry at index 1 should be unchanged.
 		entry, err := replica.storage.GetEntryAtIndex(1)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(0), entry.Term)
 
+		// Replica log must have been truncated starting from index 2 and
+		// the leader entries should have been appended to the log.
 		entry, err = replica.storage.GetEntryAtIndex(2)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(2), entry.Term)
 
+		// There are only 2 log entries.
 		_, err = replica.storage.GetEntryAtIndex(3)
 		assert.Contains(t, err.Error(), "index out of bounds")
+
+		env.Network.Tick()
+		leader.Tick()
 	})
 
 	t.Run("appends entries to the log, success=true", func(t *testing.T) {
@@ -157,7 +166,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 
 		env.Network.Tick()
 
-		replica.handleMessages()
+		assert.NoError(t, replica.handleMessages())
 
 		env.Network.Tick()
 
@@ -181,7 +190,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		leader := env.Replicas[0]
 		replica := env.Replicas[1]
 
-		leader.newTerm(withTerm(1))
+		assert.NoError(t, leader.newTerm(withTerm(1)))
 
 		entryValue, err := json.Marshal(map[string]any{
 			"key":   "key1",
@@ -210,7 +219,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 
 		env.Network.Tick()
 
-		leader.newTerm(withTerm(2))
+		assert.NoError(t, leader.newTerm(withTerm(2)))
 		leader.mutableState.commitIndex = 1
 
 		message, err := env.Bus.Receive(leader.ReplicaAddress())

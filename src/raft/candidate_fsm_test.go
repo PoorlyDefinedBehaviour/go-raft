@@ -19,11 +19,11 @@ func TestCandidateFSM(t *testing.T) {
 			cluster := Setup()
 
 			candidate := cluster.Replicas[0]
-			candidate.transitionToState(Candidate)
+			assert.NoError(t, candidate.transitionToState(Candidate))
 
 			leader := cluster.Replicas[1]
-			leader.transitionToState(Leader)
-			leader.newTerm(withTerm(candidate.mutableState.currentTermState.term + 1))
+			assert.NoError(t, leader.transitionToState(Leader))
+			assert.NoError(t, leader.newTerm(withTerm(candidate.mutableState.currentTermState.term+1)))
 
 			cluster.Bus.SendAppendEntriesRequest(leader.ReplicaAddress(), candidate.ReplicaAddress(), types.AppendEntriesInput{
 				LeaderID:          leader.config.ReplicaID,
@@ -49,12 +49,12 @@ func TestCandidateFSM(t *testing.T) {
 			cluster := Setup()
 
 			candidateA := cluster.Replicas[0]
-			candidateA.transitionToState(Candidate)
+			assert.NoError(t, candidateA.transitionToState(Candidate))
 
 			candidateB := cluster.Replicas[1]
-			candidateB.transitionToState(Candidate)
+			assert.NoError(t, candidateB.transitionToState(Candidate))
 
-			candidateA.newTerm(withTerm(candidateB.mutableState.currentTermState.term + 1))
+			assert.NoError(t, candidateA.newTerm(withTerm(candidateB.mutableState.currentTermState.term+1)))
 
 			cluster.Bus.RequestVote(candidateA.ReplicaAddress(), candidateB.ReplicaAddress(), types.RequestVoteInput{
 				CandidateID:           candidateA.config.ReplicaID,
@@ -116,7 +116,7 @@ func TestCandidateFSM(t *testing.T) {
 			t.Parallel()
 
 			assert.Equal(t, replica.config.ReplicaID, replica.mutableState.currentTermState.votedFor)
-			assert.Equal(t, uint16(1), replica.mutableState.currentTermState.votesReceived)
+			assert.Equal(t, map[types.ReplicaID]bool{replica.config.ReplicaID: true}, replica.mutableState.currentTermState.votesReceived)
 		})
 	})
 
@@ -162,11 +162,13 @@ func TestCandidateFSM(t *testing.T) {
 		cluster := Setup()
 
 		candidate := cluster.Replicas[0]
-		candidate.transitionToState(Candidate)
-		candidate.startElection()
+		assert.NoError(t, candidate.transitionToState(Candidate))
+		assert.NoError(t, candidate.startElection())
+
+		// Candidate's log is empty.
+		assert.Equal(t, uint64(0), candidate.storage.LastLogIndex())
 
 		replicaA := cluster.Replicas[1]
-		// replicaB := cluster.Replicas[2]
 
 		// Responses from previous terms are not taken into account.
 		cluster.Bus.SendRequestVoteResponse(replicaA.ReplicaAddress(), candidate.ReplicaAddress(), types.RequestVoteOutput{
@@ -216,5 +218,12 @@ func TestCandidateFSM(t *testing.T) {
 
 		// Got majority votes, becomes leader.
 		assert.Equal(t, Leader, candidate.State())
+
+		// Process leader heartbeat.
+		cluster.Tick()
+
+		// Replica appends empty log entry upon becoming leader.
+		assert.Equal(t, uint64(1), candidate.storage.LastLogIndex())
+		assert.Equal(t, candidate.mutableState.currentTermState.term, candidate.storage.LastLogTerm())
 	})
 }

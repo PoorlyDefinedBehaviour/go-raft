@@ -52,9 +52,7 @@ func (storage *FileStorage) Persist(state State) error {
 }
 
 func (storage *FileStorage) AppendEntries(entries []types.Entry) error {
-	for _, entry := range entries {
-		storage.entries = append(storage.entries, entry)
-	}
+	storage.entries = append(storage.entries, entries...)
 
 	return nil
 }

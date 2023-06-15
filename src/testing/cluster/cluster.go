@@ -16,7 +16,6 @@ import (
 type Cluster struct {
 	Replicas []TestReplica
 	Network  *network.Network
-	Storage  storage.Storage
 	Bus      *messagebus.MessageBus
 }
 
@@ -73,6 +72,8 @@ func Setup() Cluster {
 	}
 	logger := log.Sugar()
 
+	rand := rand.NewRand(0)
+
 	replicaAddresses := []types.ReplicaAddress{"localhost:8001", "localhost:8002", "localhost:8003"}
 
 	network := network.NewNetwork(network.NetworkConfig{
@@ -83,12 +84,10 @@ func Setup() Cluster {
 		MaxMessageDelayTicks:     0,
 	},
 		logger,
-		rand.NewRand(0),
+		rand,
 		replicaAddresses,
 	)
 	bus := messagebus.NewMessageBus(network)
-
-	storage := storage.NewFileStorage()
 
 	replicas := make([]TestReplica, 0)
 
@@ -112,12 +111,12 @@ func Setup() Cluster {
 		}
 
 		kv := kv.NewKvStore(bus)
-		raft, err := raft.NewRaft(config, bus, storage, kv, rand.NewRand(0), logger)
+		raft, err := raft.NewRaft(config, bus, storage.NewFileStorage(), kv, rand, logger)
 		if err != nil {
 			panic(err)
 		}
 		replicas = append(replicas, TestReplica{Raft: raft, Kv: kv})
 	}
 
-	return Cluster{Replicas: replicas, Network: network, Bus: bus, Storage: storage}
+	return Cluster{Replicas: replicas, Network: network, Bus: bus}
 }

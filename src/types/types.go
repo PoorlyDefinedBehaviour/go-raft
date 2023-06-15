@@ -1,5 +1,8 @@
 package types
 
+// Type used by raft empty heartbeat entries.
+const HeartbeatEntryType = 1
+
 type ReplicaID = uint16
 type ReplicaAddress = string
 
@@ -34,6 +37,10 @@ type Entry struct {
 
 func (*AppendEntriesInput) Message() {
 	panic("unimplemented")
+}
+
+func (entry *Entry) IsHeartbeatEntry() bool {
+	return entry.Type == HeartbeatEntryType
 }
 
 type AppendEntriesOutput struct {

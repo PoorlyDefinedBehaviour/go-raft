@@ -8,7 +8,7 @@ import (
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 )
 
-const SetCommand uint8 = 1
+const SetCommand uint8 = 2
 
 type setCommandEntry struct {
 	Key   string `json:"key"`

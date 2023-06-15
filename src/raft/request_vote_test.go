@@ -29,7 +29,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		replica.handleMessages()
+		assert.NoError(t, replica.handleMessages())
 
 		env.Network.Tick()
 
@@ -49,7 +49,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 		candidate := env.Replicas[0]
 		replica := env.Replicas[1]
 
-		replica.storage.AppendEntries([]types.Entry{{Term: 0}})
+		assert.NoError(t, replica.storage.AppendEntries([]types.Entry{{Term: 0}}))
 
 		env.Bus.RequestVote(candidate.ReplicaAddress(), replica.ReplicaAddress(), types.RequestVoteInput{
 			CandidateID:           candidate.config.ReplicaID,
@@ -60,7 +60,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		replica.handleMessages()
+		assert.NoError(t, replica.handleMessages())
 
 		env.Network.Tick()
 
@@ -80,7 +80,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 		candidate := env.Replicas[0]
 		replica := env.Replicas[1]
 
-		replica.storage.AppendEntries([]types.Entry{{Term: 1}})
+		assert.NoError(t, replica.storage.AppendEntries([]types.Entry{{Term: 1}}))
 
 		env.Bus.RequestVote(candidate.ReplicaAddress(), replica.ReplicaAddress(), types.RequestVoteInput{
 			CandidateID:           candidate.config.ReplicaID,
@@ -91,7 +91,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		replica.handleMessages()
+		assert.NoError(t, replica.handleMessages())
 
 		env.Network.Tick()
 
@@ -120,7 +120,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		replica.handleMessages()
+		assert.NoError(t, replica.handleMessages())
 
 		env.Network.Tick()
 
@@ -150,7 +150,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 			env.Network.Tick()
 
-			replica.handleMessages()
+			assert.NoError(t, replica.handleMessages())
 
 			env.Network.Tick()
 
@@ -182,7 +182,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		replica.handleMessages()
+		assert.NoError(t, replica.handleMessages())
 
 		env.Network.Tick()
 
@@ -203,7 +203,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		replica.handleMessages()
+		assert.NoError(t, replica.handleMessages())
 
 		env.Network.Tick()
 
