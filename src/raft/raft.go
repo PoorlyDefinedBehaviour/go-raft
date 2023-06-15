@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
-	"github.com/poorlydefinedbehaviour/raft-go/src/mapx"
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
 	"github.com/poorlydefinedbehaviour/raft-go/src/storage"
@@ -745,14 +744,15 @@ func (raft *Raft) sendHeartbeat() error {
 		raft.mutableState.nextIndex[replica.ReplicaID] += uint64(len(entries))
 	}
 
-	minIndexReplicatedInMajority, _ := mapx.MinValue(raft.mutableState.nextIndex)
+	// minIndexReplicatedInMajority, _ := mapx.MinValue(raft.mutableState.nextIndex)
 
-	if *minIndexReplicatedInMajority > raft.mutableState.commitIndex {
-		if err := raft.applyCommittedEntries(*minIndexReplicatedInMajority, raft.storage.LastLogIndex()); err != nil {
-			return fmt.Errorf("applying committed entries: %w", err)
-		}
-		raft.mutableState.commitIndex = *minIndexReplicatedInMajority
-	}
+	panic("todo")
+	// if *minIndexReplicatedInMajority > raft.mutableState.commitIndex {
+	// 	if err := raft.applyCommittedEntries(*minIndexReplicatedInMajority, raft.storage.LastLogIndex()); err != nil {
+	// 		return fmt.Errorf("applying committed entries: %w", err)
+	// 	}
+	// 	raft.mutableState.commitIndex = *minIndexReplicatedInMajority
+	// }
 
 	return nil
 }

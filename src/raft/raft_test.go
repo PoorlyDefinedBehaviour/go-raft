@@ -1,11 +1,13 @@
 package raft
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/kv"
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
@@ -151,5 +153,114 @@ func TestHandleUserRequest(t *testing.T) {
 func TestVoteFor(t *testing.T) {
 	t.Parallel()
 
-	panic("todo")
+	t.Run("replica must be candidate to vote for itself", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		replica := cluster.Replicas[0]
+
+		assert.PanicsWithValue(t, "must be a candidate to vote for itself", func() {
+			_ = replica.voteFor(replica.config.ReplicaID, replica.mutableState.currentTermState.term)
+		})
+	})
+
+	t.Run("replica cannot vote again after voting for another candidate", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		replica := cluster.Replicas[0]
+		candidateA := cluster.Replicas[1]
+		candidateB := cluster.Replicas[2]
+
+		assert.NoError(t, replica.voteFor(candidateA.config.ReplicaID, candidateA.mutableState.currentTermState.term))
+
+		expectedMessage := fmt.Sprintf("votedFor=%d cannot vote again after having voted", candidateA.config.ReplicaID)
+		assert.PanicsWithValue(t, expectedMessage, func() {
+			_ = replica.voteFor(candidateB.config.ReplicaID, candidateB.mutableState.currentTermState.term)
+		})
+	})
+
+	t.Run("voting twice for the same candidate has no effect", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		replica := cluster.Replicas[0]
+		candidate := cluster.Replicas[1]
+
+		assert.NoError(t, replica.voteFor(candidate.config.ReplicaID, candidate.mutableState.currentTermState.term))
+
+		assert.Equal(t, replica.mutableState.currentTermState.term, candidate.mutableState.currentTermState.term)
+		assert.Equal(t, replica.mutableState.currentTermState.votedFor, candidate.config.ReplicaID)
+
+		assert.NoError(t, replica.voteFor(candidate.config.ReplicaID, candidate.mutableState.currentTermState.term))
+
+		assert.Equal(t, replica.mutableState.currentTermState.term, candidate.mutableState.currentTermState.term)
+		assert.Equal(t, replica.mutableState.currentTermState.votedFor, candidate.config.ReplicaID)
+	})
+
+	t.Run("vote is persisted to stable storage", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		candidate := cluster.Replicas[0]
+		replica := cluster.Replicas[1]
+
+		assert.NoError(t, replica.voteFor(candidate.config.ReplicaID, uint64(candidate.mutableState.currentTermState.term)))
+
+		state, err := replica.storage.GetState()
+		assert.NoError(t, err)
+
+		assert.Equal(t, candidate.config.ReplicaID, state.VotedFor)
+	})
+
+	t.Run("vote is persisted in memory", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		candidate := cluster.Replicas[0]
+		replica := cluster.Replicas[1]
+
+		assert.NoError(t, replica.voteFor(candidate.config.ReplicaID, uint64(candidate.mutableState.currentTermState.term)))
+
+		assert.Equal(t, candidate.config.ReplicaID, replica.mutableState.currentTermState.votedFor)
+	})
+
+	t.Run("replica starts new term if the candidate's term is greater than its own", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		replica := cluster.Replicas[0]
+
+		assert.NoError(t, replica.newTerm(withTerm(4)))
+
+		candidate := cluster.Replicas[1]
+		assert.NoError(t, candidate.transitionToState(Candidate))
+		assert.NoError(t, candidate.newTerm(withTerm(5)))
+
+		assert.NoError(t, replica.voteFor(candidate.config.ReplicaID, uint64(candidate.mutableState.currentTermState.term)))
+
+		assert.Equal(t, candidate.mutableState.currentTermState.term, replica.mutableState.currentTermState.term)
+	})
+
+	t.Run("when voting for itself, replica increments vote count", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		candidate := cluster.Replicas[0]
+		assert.NoError(t, candidate.transitionToState(Candidate))
+
+		assert.Equal(t, uint16(0), candidate.votesReceived())
+
+		assert.NoError(t, candidate.voteFor(candidate.config.ReplicaID, uint64(candidate.mutableState.currentTermState.term)))
+
+		assert.Equal(t, uint16(1), candidate.votesReceived())
+		assert.True(t, candidate.mutableState.currentTermState.votesReceived[candidate.config.ReplicaID])
+	})
 }

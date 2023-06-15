@@ -16,6 +16,8 @@ type State struct {
 }
 
 type Storage interface {
+	GetState() (*State, error)
+
 	Persist(state State) error
 
 	AppendEntries(entries []types.Entry) error
@@ -44,6 +46,10 @@ func NewFileStorage() *FileStorage {
 	return &FileStorage{
 		entries: make([]types.Entry, 0),
 	}
+}
+
+func (storage *FileStorage) GetState() (*State, error) {
+	return storage.state, nil
 }
 
 func (storage *FileStorage) Persist(state State) error {
