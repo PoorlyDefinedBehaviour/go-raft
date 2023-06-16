@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/poorlydefinedbehaviour/raft-go/src/kv"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 	"github.com/stretchr/testify/assert"
 )
+
+const kvSetCommand = 2
 
 func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 	t.Parallel()
@@ -156,7 +157,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 			Entries: []types.Entry{
 				{
 					Term:  leader.mutableState.currentTermState.term,
-					Type:  kv.SetCommand,
+					Type:  kvSetCommand,
 					Value: entryValue,
 				},
 			},
@@ -191,7 +192,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 			Entries: []types.Entry{
 				{
 					Term:  leader.mutableState.currentTermState.term,
-					Type:  kv.SetCommand,
+					Type:  kvSetCommand,
 					Value: entryValue,
 				},
 			},

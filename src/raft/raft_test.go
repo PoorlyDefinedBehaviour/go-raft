@@ -24,6 +24,12 @@ type Cluster struct {
 
 type TestReplica struct {
 	*Raft
+	// TODO: why does raft_test know about the kv?
+	// Maybe it should use something else as the state machine
+	// to avoid the import cycle kv <-> raft.
+	// It could be a simpler kv for testing purposes.
+	// Maybe it is possible to use only testing/cluster if the
+	// import cycle is removed.
 	Kv *kv.KvStore
 }
 
