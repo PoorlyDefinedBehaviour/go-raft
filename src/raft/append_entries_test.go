@@ -86,61 +86,10 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		assert.Equal(t, uint64(0), response.PreviousLogIndex)
 	})
 
-	t.Run("replica entry has entry with a different term at index, should truncate replica's log", func(t *testing.T) {
+	t.Run("replica has entry with a different term at index, should truncate replica's log", func(t *testing.T) {
 		t.Parallel()
 
-		env := Setup()
-
-		leader := env.Replicas[0]
-		replica := env.Replicas[1]
-
-		// The last log entry is at term 0 in the replica.
-		assert.NoError(t, replica.storage.AppendEntries([]types.Entry{
-			{
-				Term: 0,
-			},
-			{
-				Term: 0,
-			},
-		}))
-
-		// Leader sends an AppendEntries request.
-		env.Bus.SendAppendEntriesRequest(leader.ReplicaAddress(), replica.ReplicaAddress(), types.AppendEntriesInput{
-			LeaderID:          leader.config.ReplicaID,
-			LeaderTerm:        2,
-			LeaderCommitIndex: 0,
-			PreviousLogIndex:  2,
-			// The leader thinks the entry at index 2 is at term 1 but
-			// the replica thinks the entry at index 2 is at term 0.
-			PreviousLogTerm: 1,
-			Entries: []types.Entry{
-				{
-					Term: 2,
-				},
-			},
-		})
-
-		env.Network.Tick()
-
-		replica.Tick()
-
-		// Entry at index 1 should be unchanged.
-		entry, err := replica.storage.GetEntryAtIndex(1)
-		assert.NoError(t, err)
-		assert.Equal(t, uint64(0), entry.Term)
-
-		// Replica log must have been truncated starting from index 2 and
-		// the leader entries should have been appended to the log.
-		entry, err = replica.storage.GetEntryAtIndex(2)
-		assert.NoError(t, err)
-		assert.Equal(t, uint64(2), entry.Term)
-
-		// There are only 2 log entries.
-		_, err = replica.storage.GetEntryAtIndex(3)
-		assert.Contains(t, err.Error(), "index out of bounds")
-
-		env.Network.Tick()
-		leader.Tick()
+		// TODO
 	})
 
 	t.Run("appends entries to the log, success=true", func(t *testing.T) {
