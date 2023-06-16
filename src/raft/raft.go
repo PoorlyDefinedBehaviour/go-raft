@@ -15,6 +15,8 @@ import (
 
 const appendEntriesBatchSize = 100
 
+var ErrNoQuorum = errors.New("did not get successful response from majority")
+
 type State struct{ value uint8 }
 
 func (state State) String() string {
@@ -54,7 +56,16 @@ type Raft struct {
 	// Random number generator.
 	rand rand.Random
 
+	// Represents the current request that's being sent to every replica.
+	inFlightRequest *request
+
 	logger *zap.SugaredLogger
+}
+
+type request struct {
+	successes map[types.ReplicaID]bool
+	failures  map[types.ReplicaID]bool
+	doneCh    chan error
 }
 
 type MutableState struct {
@@ -233,8 +244,21 @@ func (raft *Raft) ReplicaAddress() types.ReplicaAddress {
 }
 
 func (raft *Raft) Start() {
-	raft.Tick()
-	time.Sleep(1 * time.Millisecond)
+	for {
+		raft.Tick()
+		time.Sleep(1 * time.Millisecond)
+	}
+}
+
+func newInFlightRequest(replicaID types.ReplicaID, doneCh chan error) *request {
+	return &request{
+		successes: map[types.ReplicaID]bool{
+			// The replica itself succeeded in processing the request.
+			replicaID: true,
+		},
+		failures: make(map[types.ReplicaID]bool),
+		doneCh:   doneCh,
+	}
 }
 
 func (raft *Raft) HandleUserRequest(typ uint8, value []byte) (*types.UserRequestInput, error) {
@@ -242,15 +266,19 @@ func (raft *Raft) HandleUserRequest(typ uint8, value []byte) (*types.UserRequest
 		return nil, fmt.Errorf("request type is reserved. type=%d", typ)
 	}
 
-	request := &types.UserRequestInput{
+	userRequest := &types.UserRequestInput{
 		Type:   typ,
 		Value:  value,
 		DoneCh: make(chan error, 1),
 	}
 
-	raft.messageBus.QueueUserRequest(request)
+	assert.True(raft.inFlightRequest == nil, "there is a request in flight")
 
-	return request, nil
+	raft.inFlightRequest = newInFlightRequest(raft.config.ReplicaID, userRequest.DoneCh)
+
+	raft.messageBus.QueueUserRequest(userRequest)
+
+	return userRequest, nil
 }
 
 func (raft *Raft) Tick() {
@@ -489,6 +517,7 @@ func (raft *Raft) handleMessages() error {
 		replica := findReplicaByID(raft.config.Replicas, message.LeaderID)
 
 		appendEntriesOutput := types.AppendEntriesOutput{
+			ReplicaID:        raft.config.ReplicaID,
 			CurrentTerm:      raft.mutableState.currentTermState.term,
 			Success:          false,
 			PreviousLogIndex: raft.storage.LastLogIndex(),
@@ -571,6 +600,7 @@ func (raft *Raft) handleMessages() error {
 		raft.mutableState.currentTermState.term = message.LeaderTerm
 
 		raft.messageBus.SendAppendEntriesResponse(raft.config.ReplicaAddress, replica.ReplicaAddress, types.AppendEntriesOutput{
+			ReplicaID:        raft.config.ReplicaID,
 			CurrentTerm:      raft.mutableState.currentTermState.term,
 			Success:          true,
 			PreviousLogIndex: raft.storage.LastLogIndex(),
@@ -578,16 +608,37 @@ func (raft *Raft) handleMessages() error {
 		})
 
 	case *types.AppendEntriesOutput:
-		raft.debug("AppendEntriesOutput TERM=%d SUCCESS=%t PREVIOUS_LOG_INDEX=%d PREVIOUS_LOG_TERM=%d",
+		raft.debug("AppendEntriesOutput TERM=%d REPLICA=%d SUCCESS=%t PREVIOUS_LOG_INDEX=%d PREVIOUS_LOG_TERM=%d",
 			message.CurrentTerm,
+			message.ReplicaID,
 			message.Success,
 			message.PreviousLogIndex,
 			message.PreviousLogTerm,
 		)
 
-	case *types.RequestVoteInput:
-		//  RequestVoteInput message=&{CandidateID:1 CandidateTerm:1 CandidateLastLogIndex:1 CandidateLastLogTerm:1}
+		assert.True(raft.inFlightRequest != nil, "received response but there's no in flight request")
 
+		if message.CurrentTerm != raft.mutableState.currentTermState.term {
+			raft.debug("AppendEntriesOutput STALE TERM=%d", message.CurrentTerm)
+			break
+		}
+
+		// TODO: use something like sync.Once? (don't need the mutex)
+		if len(raft.inFlightRequest.successes) >= int(raft.majority()) ||
+			len(raft.inFlightRequest.failures) >= int(raft.majority()) {
+			raft.debug("AppendEntriesOutput IGNORE(GOT QUORUM) TERM=%d REPLICA=%d", message.CurrentTerm, message.ReplicaID)
+			break
+		}
+
+		raft.inFlightRequest.successes[message.ReplicaID] = message.Success
+
+		if len(raft.inFlightRequest.successes) == int(raft.majority()) {
+			raft.inFlightRequest.doneCh <- nil
+		} else if len(raft.inFlightRequest.failures) == int(raft.majority()) {
+			raft.inFlightRequest.doneCh <- ErrNoQuorum
+		}
+
+	case *types.RequestVoteInput:
 		raft.debug("RequestVoteInput REPLICA_ID=%d REPLICA_TERM=%d LOG_INDEX=%d LOG_TERM=%d",
 			message.CandidateID,
 			message.CandidateTerm,
@@ -738,7 +789,8 @@ func (raft *Raft) sendHeartbeat() error {
 			PreviousLogIndex:  previousLogIndex,
 			PreviousLogTerm:   uint64(previousLogTerm),
 			Entries:           entries,
-		})
+		},
+		)
 
 		// TODO: shouldn't advance next index if request does not succeed
 		raft.mutableState.nextIndex[replica.ReplicaID] += uint64(len(entries))
@@ -746,7 +798,6 @@ func (raft *Raft) sendHeartbeat() error {
 
 	// minIndexReplicatedInMajority, _ := mapx.MinValue(raft.mutableState.nextIndex)
 
-	panic("todo")
 	// if *minIndexReplicatedInMajority > raft.mutableState.commitIndex {
 	// 	if err := raft.applyCommittedEntries(*minIndexReplicatedInMajority, raft.storage.LastLogIndex()); err != nil {
 	// 		return fmt.Errorf("applying committed entries: %w", err)

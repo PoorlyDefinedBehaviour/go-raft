@@ -4,6 +4,7 @@ package types
 const HeartbeatEntryType = 1
 
 type ReplicaID = uint16
+
 type ReplicaAddress = string
 
 type Message interface {
@@ -44,6 +45,7 @@ func (entry *Entry) IsHeartbeatEntry() bool {
 }
 
 type AppendEntriesOutput struct {
+	ReplicaID        ReplicaID
 	CurrentTerm      uint64
 	Success          bool
 	PreviousLogIndex uint64
