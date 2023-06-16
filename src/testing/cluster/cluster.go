@@ -38,11 +38,16 @@ func (cluster *Cluster) MustWaitForLeader() *TestReplica {
 }
 
 func (cluster *Cluster) Start() {
+
 	for {
-		select {
-		case <-time.After(1 * time.Millisecond):
-			cluster.Tick()
-		}
+		cluster.Tick()
+		time.Sleep(1 * time.Millisecond)
+	}
+}
+
+func (cluster *Cluster) TickUntilEveryMessageIsDelivered() {
+	for cluster.Network.HasPendingMessages() {
+		cluster.Tick()
 	}
 }
 

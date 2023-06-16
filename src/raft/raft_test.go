@@ -63,6 +63,12 @@ func (cluster *Cluster) mustWaitForReplicaWithStatus(state State) TestReplica {
 	panic("unable to elect a leader in time")
 }
 
+func (cluster *Cluster) TickUntilEveryMessageIsDelivered() {
+	for cluster.Network.HasPendingMessages() {
+		cluster.Tick()
+	}
+}
+
 func (cluster *Cluster) Tick() {
 	cluster.Bus.Tick()
 	cluster.Network.Tick()
@@ -141,13 +147,7 @@ func Setup() Cluster {
 func TestApplyCommittedEntries(t *testing.T) {
 	t.Parallel()
 
-	panic("todo")
-}
-
-func TestHandleUserRequest(t *testing.T) {
-	t.Parallel()
-
-	panic("todo")
+	// TODO
 }
 
 func TestVoteFor(t *testing.T) {

@@ -103,6 +103,22 @@ func (network *Network) randomDelay() uint64 {
 	return network.ticks + network.rand.GenBetween(0, network.config.MaxMessageDelayTicks)
 }
 
+// Returns `true` when there are messages in the network that will be
+// delivered some time in the future.
+func (network *Network) HasPendingMessages() bool {
+	if len(network.sendMessageQueue) > 0 {
+		return true
+	}
+
+	for _, messages := range network.toDeliverMessageQueue {
+		if len(messages) > 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (network *Network) Tick() {
 	network.ticks++
 
