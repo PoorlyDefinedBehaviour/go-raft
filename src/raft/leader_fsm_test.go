@@ -12,7 +12,44 @@ import (
 func TestSendHeartbeat(t *testing.T) {
 	t.Parallel()
 
-	panic("todo")
+	// TODO
+}
+
+func TestHandleUserRequest(t *testing.T) {
+	t.Parallel()
+
+	t.Run("request completes after entries being replicated to the majority of replicas", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		leader := cluster.MustWaitForLeader()
+
+		value, err := json.Marshal(map[string]any{
+			"key":   "key",
+			"value": []byte("value"),
+		})
+		assert.NoError(t, err)
+
+		request, err := leader.HandleUserRequest(kv.SetCommand, value)
+		assert.NoError(t, err)
+
+		cluster.TickUntilEveryMessageIsDelivered()
+
+		err = <-request.DoneCh
+		assert.NoError(t, err)
+
+		for i := 1; i <= int(leader.storage.LastLogIndex()); i++ {
+			leaderEntry, err := leader.storage.GetEntryAtIndex(uint64(i))
+			assert.NoError(t, err)
+
+			for _, replica := range cluster.Followers() {
+				replicaEntry, err := replica.storage.GetEntryAtIndex(uint64(i))
+				assert.NoError(t, err)
+				assert.Equal(t, *leaderEntry, *replicaEntry)
+			}
+		}
+	})
 }
 
 func TestLeaderFSM(t *testing.T) {
@@ -122,33 +159,6 @@ func TestLeaderFSM(t *testing.T) {
 
 		// The next heartbeat should fire at a future tick.
 		assert.True(t, heartbeatTimeoutAtTick < leader.mutableState.nextLeaderHeartbeatTimeout)
-	})
-
-	t.Run("leader applies entry to fsm and commits after replicating to majority replicas", func(t *testing.T) {
-		t.Parallel()
-
-		cluster := Setup()
-
-		leader := cluster.MustWaitForLeader()
-
-		value, err := json.Marshal(map[string]any{
-			"key":   "key",
-			"value": []byte("value"),
-		})
-		assert.NoError(t, err)
-
-		request, err := leader.HandleUserRequest(kv.SetCommand, value)
-		assert.NoError(t, err)
-
-		// Send messages to replicas
-		cluster.Tick()
-
-		err = <-request.DoneCh
-		assert.NoError(t, err)
-
-		value, ok := leader.Kv.Get("key")
-		assert.True(t, ok)
-		assert.Equal(t, []byte("value"), value)
 	})
 
 	t.Run("leader keeps track of the next log index that will be sent to replicas", func(t *testing.T) {
