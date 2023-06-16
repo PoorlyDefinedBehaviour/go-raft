@@ -50,6 +50,7 @@ func (messageBus *MessageBus) SendRequestVoteResponse(fromReplicaAddress, toRepl
 
 func (messageBus *MessageBus) SendAppendEntriesRequest(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.AppendEntriesInput) {
 	assert.True(fromReplicaAddress != toReplicaAddress, "replica cannot send message to itself")
+	assert.True(message.LeaderID > 0, "leader id is required")
 
 	messageBus.lock.Lock()
 	defer messageBus.lock.Unlock()
@@ -58,6 +59,7 @@ func (messageBus *MessageBus) SendAppendEntriesRequest(fromReplicaAddress, toRep
 }
 
 func (messageBus *MessageBus) SendAppendEntriesResponse(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.AppendEntriesOutput) {
+	assert.True(message.ReplicaID > 0, "replica id is required")
 	assert.True(fromReplicaAddress != toReplicaAddress, "replica cannot send message to itself")
 
 	messageBus.lock.Lock()
