@@ -1,4 +1,4 @@
-package cluster
+package testingcluster
 
 import (
 	"time"
@@ -24,13 +24,36 @@ type TestReplica struct {
 	Kv *kv.KvStore
 }
 
-func (cluster *Cluster) MustWaitForLeader() *TestReplica {
-	const maxTicks = 10_100
+func (cluster *Cluster) Followers() []TestReplica {
+	replicas := make([]TestReplica, 0)
+
+	for _, replica := range cluster.Replicas {
+		if replica.State() != raft.Leader {
+			replicas = append(replicas, replica)
+		}
+	}
+
+	return replicas
+}
+
+func (cluster *Cluster) MustWaitForCandidate() TestReplica {
+	return cluster.mustWaitForReplicaWithStatus(raft.Candidate)
+}
+
+func (cluster *Cluster) MustWaitForLeader() TestReplica {
+	return cluster.mustWaitForReplicaWithStatus(raft.Leader)
+}
+
+func (cluster *Cluster) mustWaitForReplicaWithStatus(state raft.State) TestReplica {
+	const maxTicks = 10_000
 
 	for i := 0; i < maxTicks; i++ {
 		cluster.Tick()
-		if leader := cluster.Leader(); leader != nil {
-			return leader
+
+		for _, replica := range cluster.Replicas {
+			if replica.State() == state {
+				return replica
+			}
 		}
 	}
 

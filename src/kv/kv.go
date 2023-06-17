@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
-	"github.com/poorlydefinedbehaviour/raft-go/src/raft"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 )
 
@@ -22,7 +21,6 @@ type KvStore struct {
 }
 
 func NewKvStore(bus *messagebus.MessageBus) *KvStore {
-	x := raft.Candidate
 	return &KvStore{items: make(map[string][]byte), bus: bus}
 }
 
