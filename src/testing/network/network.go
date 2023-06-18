@@ -4,9 +4,9 @@ import (
 	"fmt"
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
+	"github.com/poorlydefinedbehaviour/raft-go/src/constants"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
-	"go.uber.org/zap"
 )
 
 type NetworkConfig struct {
@@ -19,8 +19,6 @@ type NetworkConfig struct {
 
 type Network struct {
 	config NetworkConfig
-
-	logger *zap.SugaredLogger
 
 	rand rand.Random
 
@@ -59,7 +57,7 @@ type MessageToSend struct {
 	Index                int
 }
 
-func NewNetwork(config NetworkConfig, logger *zap.SugaredLogger, rand rand.Random, replicaAddresses []types.ReplicaAddress) *Network {
+func New(config NetworkConfig, rand rand.Random, replicaAddresses []types.ReplicaAddress) *Network {
 	assert.True(len(replicaAddresses) > 0, "replica addresses cannot be empty")
 
 	return &Network{
@@ -68,7 +66,6 @@ func NewNetwork(config NetworkConfig, logger *zap.SugaredLogger, rand rand.Rando
 		networkPaths:          buildNetworkPaths(replicaAddresses),
 		sendMessageQueue:      make(PriorityQueue, 0),
 		toDeliverMessageQueue: make(map[types.ReplicaAddress][]types.Message, 0),
-		logger:                logger,
 	}
 }
 
@@ -88,7 +85,34 @@ func buildNetworkPaths(replicasAddresses []types.ReplicaAddress) []NetworkPath {
 	return paths
 }
 
+func (network *Network) debug(template string, args ...interface{}) {
+	message := fmt.Sprintf(template, args...)
+
+	message = fmt.Sprintf("NETWORK: TICK=%d %s\n",
+		network.ticks,
+		message,
+	)
+
+	if constants.Debug {
+		fmt.Println(message)
+	}
+}
+
 func (network *Network) Send(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.Message) {
+	switch message.(type) {
+	case *types.UserRequestInput:
+		network.debug("SEND UserRequestInput %s -> %s", fromReplicaAddress, toReplicaAddress)
+	case *types.AppendEntriesInput:
+		network.debug("SEND AppendEntriesInput %s -> %s", fromReplicaAddress, toReplicaAddress)
+	case *types.AppendEntriesOutput:
+		network.debug("SEND AppendEntriesOutput %s -> %s", fromReplicaAddress, toReplicaAddress)
+	case *types.RequestVoteInput:
+		network.debug("SEND RequestVoteInput %s -> %s", fromReplicaAddress, toReplicaAddress)
+	case *types.RequestVoteOutput:
+		network.debug("SEND RequestVoteOutput %s -> %s", fromReplicaAddress, toReplicaAddress)
+	default:
+		panic(fmt.Sprintf("unexpected message type: %+v", message))
+	}
 	messageToSend := &MessageToSend{
 		CanBeDeliveredAtTick: network.randomDelay(),
 		FromReplicaAddress:   fromReplicaAddress,
@@ -125,6 +149,11 @@ func (network *Network) Tick() {
 	for i := range network.networkPaths {
 		shouldMakeUnreachable := network.rand.GenBool(network.config.PathClogProbability)
 		if shouldMakeUnreachable {
+			network.debug("UNREACHABLE UNTIL_TICK=%d %s -> %s",
+				network.networkPaths[i].makeReachableAfterTick,
+				network.networkPaths[i].fromReplicaAddress,
+				network.networkPaths[i].toReplicaAddress,
+			)
 			network.networkPaths[i].makeReachableAfterTick = network.rand.GenBetween(0, network.config.MaxNetworkPathClogTicks)
 		}
 	}
@@ -145,16 +174,19 @@ func (network *Network) Tick() {
 
 		shouldDrop := network.rand.GenBool(network.config.DropMessageProbability)
 		if shouldDrop {
+			network.debug("DROP MESSAGE=%+v", oldestMessage)
 			continue
 		}
 
 		if network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] == nil {
 			network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] = make([]types.Message, 0)
 		}
+		network.debug("MARKING AS DELIVEARABLE=%+v", oldestMessage)
 		network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] = append(network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress], oldestMessage.Message)
 
 		shouldReplay := network.rand.GenBool(network.config.MessageReplayProbability)
 		if shouldReplay {
+			network.debug("WILL REPLAY MESSAGE=%+v", oldestMessage)
 			network.sendMessageQueue.Push(oldestMessage)
 		}
 	}
@@ -178,6 +210,21 @@ func (network *Network) Receive(replicaAddress types.ReplicaAddress) (types.Mess
 
 	message := messages[0]
 	network.toDeliverMessageQueue[replicaAddress] = messages[1:]
+
+	switch message.(type) {
+	case *types.UserRequestInput:
+		network.debug("RECV UserRequestInput %s", replicaAddress)
+	case *types.AppendEntriesInput:
+		network.debug("RECV AppendEntriesInput %s", replicaAddress)
+	case *types.AppendEntriesOutput:
+		network.debug("RECV AppendEntriesOutput %s", replicaAddress)
+	case *types.RequestVoteInput:
+		network.debug("RECV RequestVoteInput %s", replicaAddress)
+	case *types.RequestVoteOutput:
+		network.debug("RECV RequestVoteOutput %s", replicaAddress)
+	default:
+		panic(fmt.Sprintf("unexpected message type: %+v", message))
+	}
 
 	return message, nil
 }

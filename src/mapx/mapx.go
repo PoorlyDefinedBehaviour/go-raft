@@ -4,7 +4,7 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
-func anyKey[K comparable, V constraints.Ordered](m map[K]V) (K, bool) {
+func anyKey[K comparable, V any](m map[K]V) (K, bool) {
 	for key := range m {
 		return key, true
 	}

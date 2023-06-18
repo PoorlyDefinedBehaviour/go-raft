@@ -1,0 +1,25 @@
+# 2023/06/17 21:32:04.153115 [TestRemoveByReplicaID] [rapid] draw replicaIDS: []uint16{0x1e, 0x2f, 0x72, 0x5}
+# 2023/06/17 21:32:04.153394 [TestRemoveByReplicaID] 
+# 	Error Trace:	/Users/brunofelipefrancisco/dev/go-raft/src/raft/raft_test.go:342
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:367
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:376
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:202
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:117
+# 	            				/Users/brunofelipefrancisco/dev/go-raft/src/raft/raft_test.go:322
+# 	Error:      	[]raft.Replica{raft.Replica{ReplicaID:0x1e, ReplicaAddress:"localhost:80030"}, raft.Replica{ReplicaID:0x2f, ReplicaAddress:"localhost:80047"}, raft.Replica{ReplicaID:0x72, ReplicaAddress:"localhost:800114"}, raft.Replica{ReplicaID:0x5, ReplicaAddress:"localhost:8005"}} should not contain raft.Replica{ReplicaID:0x1e, ReplicaAddress:"localhost:80030"}
+# 	Test:       	TestRemoveByReplicaID
+# 
+v0.4.8#10579255155832916108
+0xa9a197ca2c6ae
+0xe879563110b9b
+0x1e
+0xf422319906d75
+0xe228021471f5c
+0x2f
+0x16c2d6ae15b160
+0x1047d74e82ddb1
+0x72
+0x18db6e9ab12a4a
+0x7d9628793db84
+0x5
+0x174b630f0c43

@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -31,7 +32,7 @@ func TestHandleUserRequest(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		request, err := leader.HandleUserRequest(kv.SetCommand, value)
+		request, err := leader.HandleUserRequest(context.Background(), kv.SetCommand, value)
 		assert.NoError(t, err)
 
 		cluster.TickUntilEveryMessageIsDelivered()
@@ -39,12 +40,12 @@ func TestHandleUserRequest(t *testing.T) {
 		err = <-request.DoneCh
 		assert.NoError(t, err)
 
-		for i := 1; i <= int(leader.storage.LastLogIndex()); i++ {
-			leaderEntry, err := leader.storage.GetEntryAtIndex(uint64(i))
+		for i := 1; i <= int(leader.Storage.LastLogIndex()); i++ {
+			leaderEntry, err := leader.Storage.GetEntryAtIndex(uint64(i))
 			assert.NoError(t, err)
 
 			for _, replica := range cluster.Followers() {
-				replicaEntry, err := replica.storage.GetEntryAtIndex(uint64(i))
+				replicaEntry, err := replica.Storage.GetEntryAtIndex(uint64(i))
 				assert.NoError(t, err)
 				assert.Equal(t, *leaderEntry, *replicaEntry)
 			}
@@ -69,7 +70,7 @@ func TestLeaderFSM(t *testing.T) {
 			newLeader := cluster.Replicas[1]
 			assert.NoError(t, newLeader.newTerm(withTerm(oldLeader.mutableState.currentTermState.term+1)))
 			assert.NoError(t, newLeader.transitionToState(Leader))
-			assert.NoError(t, newLeader.sendHeartbeat())
+			assert.NoError(t, newLeader.sendHeartbeat(context.Background()))
 
 			cluster.Bus.Tick()
 			cluster.Network.Tick()
@@ -93,7 +94,7 @@ func TestLeaderFSM(t *testing.T) {
 			assert.NoError(t, candidate.newTerm(withTerm(leader.mutableState.currentTermState.term+1)))
 
 			cluster.Bus.RequestVote(candidate.ReplicaAddress(), leader.ReplicaAddress(), types.RequestVoteInput{
-				CandidateID:           candidate.config.ReplicaID,
+				CandidateID:           candidate.Config.ReplicaID,
 				CandidateTerm:         candidate.mutableState.currentTermState.term,
 				CandidateLastLogIndex: 0,
 				CandidateLastLogTerm:  0,
@@ -132,11 +133,11 @@ func TestLeaderFSM(t *testing.T) {
 			response := message.(*types.AppendEntriesInput)
 
 			assert.Equal(t, &types.AppendEntriesInput{
-				LeaderID:          leader.config.ReplicaID,
+				LeaderID:          leader.Config.ReplicaID,
 				LeaderTerm:        leader.mutableState.currentTermState.term,
 				LeaderCommitIndex: leader.mutableState.commitIndex,
-				PreviousLogIndex:  leader.storage.LastLogIndex(),
-				PreviousLogTerm:   leader.storage.LastLogTerm(),
+				PreviousLogIndex:  leader.Storage.LastLogIndex(),
+				PreviousLogTerm:   leader.Storage.LastLogTerm(),
 				Entries:           make([]types.Entry, 0),
 			},
 				response,
@@ -175,11 +176,11 @@ func TestLeaderFSM(t *testing.T) {
 			assert.NoError(t, leader.transitionToState(Leader))
 
 			// Will send the empty entry to replicas.
-			assert.NoError(t, leader.sendHeartbeat())
+			assert.NoError(t, leader.sendHeartbeat(context.Background()))
 
 			// Sent one entry to each replica, next entry index starts at 2.
 			for _, replica := range cluster.Followers() {
-				assert.Equal(t, uint64(2), leader.mutableState.nextIndex[replica.config.ReplicaID])
+				assert.Equal(t, uint64(2), leader.mutableState.nextIndex[replica.Config.ReplicaID])
 			}
 		})
 
@@ -194,7 +195,7 @@ func TestLeaderFSM(t *testing.T) {
 			assert.NoError(t, leader.transitionToState(Leader))
 
 			// Leader appended another entry to the log.
-			assert.NoError(t, leader.storage.AppendEntries([]types.Entry{
+			assert.NoError(t, leader.Storage.AppendEntries([]types.Entry{
 				{
 					Term:  leader.mutableState.currentTermState.term,
 					Type:  1,
@@ -204,11 +205,11 @@ func TestLeaderFSM(t *testing.T) {
 			))
 
 			// Will send entries at index 1 and 2 to replicas.
-			assert.NoError(t, leader.sendHeartbeat())
+			assert.NoError(t, leader.sendHeartbeat(context.Background()))
 
 			// Next entry starts at index 3.
 			for _, replica := range cluster.Followers() {
-				assert.Equal(t, uint64(3), leader.mutableState.nextIndex[replica.config.ReplicaID])
+				assert.Equal(t, uint64(3), leader.mutableState.nextIndex[replica.Config.ReplicaID])
 			}
 		})
 	})

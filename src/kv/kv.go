@@ -38,7 +38,7 @@ func (kv *KvStore) Set(key string, value []byte) error {
 		Value:  bytes,
 		DoneCh: make(chan error),
 	}
-	kv.bus.QueueUserRequest(&request)
+	kv.bus.QueueUserRequest("TODO", &request)
 	defer close(request.DoneCh)
 
 	if err := <-request.DoneCh; err != nil {

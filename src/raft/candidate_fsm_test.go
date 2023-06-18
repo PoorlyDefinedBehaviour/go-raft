@@ -26,7 +26,7 @@ func TestCandidateFSM(t *testing.T) {
 			assert.NoError(t, leader.newTerm(withTerm(candidate.mutableState.currentTermState.term+1)))
 
 			cluster.Bus.SendAppendEntriesRequest(leader.ReplicaAddress(), candidate.ReplicaAddress(), types.AppendEntriesInput{
-				LeaderID:          leader.config.ReplicaID,
+				LeaderID:          leader.Config.ReplicaID,
 				LeaderTerm:        leader.mutableState.currentTermState.term,
 				LeaderCommitIndex: 0,
 				PreviousLogIndex:  0,
@@ -57,7 +57,7 @@ func TestCandidateFSM(t *testing.T) {
 			assert.NoError(t, candidateA.newTerm(withTerm(candidateB.mutableState.currentTermState.term+1)))
 
 			cluster.Bus.RequestVote(candidateA.ReplicaAddress(), candidateB.ReplicaAddress(), types.RequestVoteInput{
-				CandidateID:           candidateA.config.ReplicaID,
+				CandidateID:           candidateA.Config.ReplicaID,
 				CandidateTerm:         candidateA.mutableState.currentTermState.term,
 				CandidateLastLogIndex: 0,
 				CandidateLastLogTerm:  0,
@@ -115,8 +115,8 @@ func TestCandidateFSM(t *testing.T) {
 		t.Run("candidate votes for itself", func(t *testing.T) {
 			t.Parallel()
 
-			assert.Equal(t, replica.config.ReplicaID, replica.mutableState.currentTermState.votedFor)
-			assert.Equal(t, map[types.ReplicaID]bool{replica.config.ReplicaID: true}, replica.mutableState.currentTermState.votesReceived)
+			assert.Equal(t, replica.Config.ReplicaID, replica.mutableState.currentTermState.votedFor)
+			assert.Equal(t, map[types.ReplicaID]bool{replica.Config.ReplicaID: true}, replica.mutableState.currentTermState.votesReceived)
 		})
 	})
 
@@ -131,7 +131,7 @@ func TestCandidateFSM(t *testing.T) {
 			termBeforeElection := replica.mutableState.currentTermState.term
 
 			// Tick until the timeout fires.
-			timeoutAtTick := replica.mutableState.nextLeaderElectionTimeout + 1 - replica.mutableState.currentTick
+			timeoutAtTick := replica.mutableState.nextLeaderElectionTimeout + 1 - replica.Clock.CurrentTick()
 			for i := uint64(0); i < timeoutAtTick; i++ {
 				replica.Tick()
 			}
@@ -146,7 +146,7 @@ func TestCandidateFSM(t *testing.T) {
 			termBeforeElection := replica.mutableState.currentTermState.term
 
 			// Tick until the timeout fires again.
-			timeoutAtTick := replica.mutableState.nextLeaderElectionTimeout + 1 - replica.mutableState.currentTick
+			timeoutAtTick := replica.mutableState.nextLeaderElectionTimeout + 1 - replica.Clock.CurrentTick()
 			for i := uint64(0); i < timeoutAtTick; i++ {
 				replica.Tick()
 			}
@@ -166,7 +166,7 @@ func TestCandidateFSM(t *testing.T) {
 		assert.NoError(t, candidate.startElection())
 
 		// Candidate's log is empty.
-		assert.Equal(t, uint64(0), candidate.storage.LastLogIndex())
+		assert.Equal(t, uint64(0), candidate.Storage.LastLogIndex())
 
 		replicaA := cluster.Replicas[1]
 
@@ -223,7 +223,7 @@ func TestCandidateFSM(t *testing.T) {
 		cluster.Tick()
 
 		// Replica appends empty log entry upon becoming leader.
-		assert.Equal(t, uint64(1), candidate.storage.LastLogIndex())
-		assert.Equal(t, candidate.mutableState.currentTermState.term, candidate.storage.LastLogTerm())
+		assert.Equal(t, uint64(1), candidate.Storage.LastLogIndex())
+		assert.Equal(t, candidate.mutableState.currentTermState.term, candidate.Storage.LastLogTerm())
 	})
 }

@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -25,7 +26,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		assert.NoError(t, replica.newTerm(withTerm(2)))
 
 		env.Bus.SendAppendEntriesRequest(leader.ReplicaAddress(), replica.ReplicaAddress(), types.AppendEntriesInput{
-			LeaderID: leader.config.ReplicaID,
+			LeaderID: leader.Config.ReplicaID,
 			// And the leader is at term 1.
 			LeaderTerm:        1,
 			LeaderCommitIndex: 0,
@@ -36,7 +37,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 
 		env.Network.Tick()
 
-		assert.NoError(t, replica.handleMessages())
+		assert.NoError(t, replica.handleMessages(context.Background()))
 
 		env.Network.Tick()
 
@@ -62,7 +63,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		assert.NoError(t, leader.newTerm(withTerm(1)))
 
 		appendEntriesInput := types.AppendEntriesInput{
-			LeaderID:          leader.config.ReplicaID,
+			LeaderID:          leader.Config.ReplicaID,
 			LeaderTerm:        leader.mutableState.currentTermState.term,
 			LeaderCommitIndex: 0,
 			PreviousLogIndex:  1,
@@ -102,21 +103,21 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		replica := env.Replicas[1]
 
 		env.Bus.SendAppendEntriesRequest(leader.ReplicaAddress(), replica.ReplicaAddress(), types.AppendEntriesInput{
-			LeaderID:          leader.config.ReplicaID,
-			LeaderTerm:        0,
+			LeaderID:          leader.Config.ReplicaID,
+			LeaderTerm:        2,
 			LeaderCommitIndex: 0,
 			PreviousLogIndex:  0,
 			PreviousLogTerm:   0,
 			Entries: []types.Entry{
 				{
-					Term: 0,
+					Term: 2,
 				},
 			},
 		})
 
 		env.Network.Tick()
 
-		assert.NoError(t, replica.handleMessages())
+		assert.NoError(t, replica.handleMessages(context.Background()))
 
 		env.Network.Tick()
 
@@ -127,9 +128,9 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
 		assert.True(t, response.Success)
 
-		entry, err := replica.storage.GetEntryAtIndex(1)
+		entry, err := replica.Storage.GetEntryAtIndex(1)
 		assert.NoError(t, err)
-		assert.Equal(t, uint64(0), entry.Term)
+		assert.Equal(t, uint64(2), entry.Term)
 	})
 
 	t.Run("leader commit index is greater than the replica commit index, should apply entries to state machine", func(t *testing.T) {
@@ -149,7 +150,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		assert.NoError(t, err)
 
 		env.Bus.SendAppendEntriesRequest(leader.ReplicaAddress(), replica.ReplicaAddress(), types.AppendEntriesInput{
-			LeaderID:          leader.config.ReplicaID,
+			LeaderID:          leader.Config.ReplicaID,
 			LeaderTerm:        leader.mutableState.currentTermState.term,
 			LeaderCommitIndex: leader.mutableState.commitIndex,
 			PreviousLogIndex:  0,
@@ -184,7 +185,7 @@ func TestHandleMessagesAppendEntriesRequest(t *testing.T) {
 		assert.NoError(t, err)
 
 		env.Bus.SendAppendEntriesRequest(leader.ReplicaAddress(), replica.ReplicaAddress(), types.AppendEntriesInput{
-			LeaderID:          leader.config.ReplicaID,
+			LeaderID:          leader.Config.ReplicaID,
 			LeaderTerm:        leader.mutableState.currentTermState.term,
 			LeaderCommitIndex: leader.mutableState.commitIndex,
 			PreviousLogIndex:  1,

@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"context"
 	"testing"
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
@@ -21,7 +22,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 		assert.NoError(t, replica.newTerm(withTerm(1)))
 
 		env.Bus.RequestVote(candidate.ReplicaAddress(), replica.ReplicaAddress(), types.RequestVoteInput{
-			CandidateID:           candidate.config.ReplicaID,
+			CandidateID:           candidate.Config.ReplicaID,
 			CandidateTerm:         0,
 			CandidateLastLogIndex: 0,
 			CandidateLastLogTerm:  0,
@@ -29,7 +30,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		assert.NoError(t, replica.handleMessages())
+		assert.NoError(t, replica.handleMessages(context.Background()))
 
 		env.Network.Tick()
 
@@ -49,10 +50,10 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 		candidate := env.Replicas[0]
 		replica := env.Replicas[1]
 
-		assert.NoError(t, replica.storage.AppendEntries([]types.Entry{{Term: 0}}))
+		assert.NoError(t, replica.Storage.AppendEntries([]types.Entry{{Term: 0}}))
 
 		env.Bus.RequestVote(candidate.ReplicaAddress(), replica.ReplicaAddress(), types.RequestVoteInput{
-			CandidateID:           candidate.config.ReplicaID,
+			CandidateID:           candidate.Config.ReplicaID,
 			CandidateTerm:         0,
 			CandidateLastLogIndex: 0,
 			CandidateLastLogTerm:  0,
@@ -60,7 +61,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		assert.NoError(t, replica.handleMessages())
+		assert.NoError(t, replica.handleMessages(context.Background()))
 
 		env.Network.Tick()
 
@@ -80,10 +81,10 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 		candidate := env.Replicas[0]
 		replica := env.Replicas[1]
 
-		assert.NoError(t, replica.storage.AppendEntries([]types.Entry{{Term: 1}}))
+		assert.NoError(t, replica.Storage.AppendEntries([]types.Entry{{Term: 1}}))
 
 		env.Bus.RequestVote(candidate.ReplicaAddress(), replica.ReplicaAddress(), types.RequestVoteInput{
-			CandidateID:           candidate.config.ReplicaID,
+			CandidateID:           candidate.Config.ReplicaID,
 			CandidateTerm:         1,
 			CandidateLastLogIndex: 1,
 			CandidateLastLogTerm:  0,
@@ -91,7 +92,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		assert.NoError(t, replica.handleMessages())
+		assert.NoError(t, replica.handleMessages(context.Background()))
 
 		env.Network.Tick()
 
@@ -112,7 +113,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 		replica := env.Replicas[1]
 
 		env.Bus.RequestVote(candidate.ReplicaAddress(), replica.ReplicaAddress(), types.RequestVoteInput{
-			CandidateID:           candidate.config.ReplicaID,
+			CandidateID:           candidate.Config.ReplicaID,
 			CandidateTerm:         0,
 			CandidateLastLogIndex: 0,
 			CandidateLastLogTerm:  0,
@@ -120,7 +121,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		assert.NoError(t, replica.handleMessages())
+		assert.NoError(t, replica.handleMessages(context.Background()))
 
 		env.Network.Tick()
 
@@ -142,7 +143,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		for i := 0; i < 2; i++ {
 			env.Bus.RequestVote(candidate.ReplicaAddress(), replica.ReplicaAddress(), types.RequestVoteInput{
-				CandidateID:           candidate.config.ReplicaID,
+				CandidateID:           candidate.Config.ReplicaID,
 				CandidateTerm:         0,
 				CandidateLastLogIndex: 0,
 				CandidateLastLogTerm:  0,
@@ -150,7 +151,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 			env.Network.Tick()
 
-			assert.NoError(t, replica.handleMessages())
+			assert.NoError(t, replica.handleMessages(context.Background()))
 
 			env.Network.Tick()
 
@@ -174,7 +175,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		// Request vote for candidate A.
 		env.Bus.RequestVote(candidateA.ReplicaAddress(), replica.ReplicaAddress(), types.RequestVoteInput{
-			CandidateID:           candidateA.config.ReplicaID,
+			CandidateID:           candidateA.Config.ReplicaID,
 			CandidateTerm:         0,
 			CandidateLastLogIndex: 0,
 			CandidateLastLogTerm:  0,
@@ -182,7 +183,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		assert.NoError(t, replica.handleMessages())
+		assert.NoError(t, replica.handleMessages(context.Background()))
 
 		env.Network.Tick()
 
@@ -195,7 +196,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		// Request vote for candidate B
 		env.Bus.RequestVote(candidateB.ReplicaAddress(), replica.ReplicaAddress(), types.RequestVoteInput{
-			CandidateID:           candidateB.config.ReplicaID,
+			CandidateID:           candidateB.Config.ReplicaID,
 			CandidateTerm:         0,
 			CandidateLastLogIndex: 0,
 			CandidateLastLogTerm:  0,
@@ -203,7 +204,7 @@ func TestHandleMessagesRequestVote(t *testing.T) {
 
 		env.Network.Tick()
 
-		assert.NoError(t, replica.handleMessages())
+		assert.NoError(t, replica.handleMessages(context.Background()))
 
 		env.Network.Tick()
 
