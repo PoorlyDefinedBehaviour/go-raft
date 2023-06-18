@@ -1,8 +1,12 @@
 package storage
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path"
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
@@ -16,6 +20,8 @@ type State struct {
 }
 
 type Storage interface {
+	Directory() string
+
 	GetState() (*State, error)
 
 	Persist(state State) error
@@ -38,14 +44,60 @@ type Storage interface {
 }
 
 type FileStorage struct {
-	state   *State
-	entries []types.Entry
+	stateFile *os.File
+	state     *State
+	entries   []types.Entry
+	// The directory where raft files are going to be stored.
+	directory string
 }
 
-func NewFileStorage() *FileStorage {
-	return &FileStorage{
-		entries: make([]types.Entry, 0),
+func NewFileStorage(directory string) (*FileStorage, error) {
+	if err := os.MkdirAll(directory, 0750); err != nil {
+		return nil, fmt.Errorf("creating storage directory: directory=%s %w", directory, err)
 	}
+
+	stateFilePath := path.Join(directory, "raft.state")
+	stateFile, err := os.OpenFile(stateFilePath, os.O_CREATE|os.O_RDWR, 0755)
+	if err != nil {
+		return nil, fmt.Errorf("opening state file: path=%s %w", stateFilePath, err)
+	}
+
+	state, err := getState(stateFile)
+	if err != nil {
+		return nil, fmt.Errorf("getting state from disk: %w", err)
+	}
+
+	return &FileStorage{
+		stateFile: stateFile,
+		state:     state,
+		entries:   make([]types.Entry, 0),
+		directory: directory,
+	}, nil
+}
+
+func getState(file *os.File) (*State, error) {
+	// 8 bytes for the current term
+	// 2 bytes for the current vote
+	var buffer [10]byte
+	n, err := file.ReadAt(buffer[:], 0)
+	if err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading state file: %w", err)
+	}
+	if n != len(buffer) {
+		return nil, fmt.Errorf("read unexpected number of bytes from state file: bytesRead=%d", n)
+	}
+
+	currentTerm := binary.LittleEndian.Uint64(buffer[0:8])
+	votedFor := binary.LittleEndian.Uint16(buffer[8:10])
+
+	return &State{CurrentTerm: currentTerm, VotedFor: uint16(votedFor)}, nil
+}
+
+func (storage *FileStorage) Directory() string {
+	return storage.directory
 }
 
 func (storage *FileStorage) GetState() (*State, error) {
@@ -53,7 +105,22 @@ func (storage *FileStorage) GetState() (*State, error) {
 }
 
 func (storage *FileStorage) Persist(state State) error {
+	var buffer [10]byte
+
+	binary.LittleEndian.PutUint64(buffer[0:8], state.CurrentTerm)
+	binary.LittleEndian.PutUint16(buffer[8:10], state.VotedFor)
+
+	_, err := storage.stateFile.WriteAt(buffer[:], 0)
+	if err != nil {
+		return fmt.Errorf("writing state to file: %w", err)
+	}
+
+	if err := storage.stateFile.Sync(); err != nil {
+		return fmt.Errorf("syncing data to disk: %w", err)
+	}
+
 	storage.state = &state
+
 	return nil
 }
 
