@@ -1,31 +1,110 @@
 package testingcluster
 
 import (
+	cryptorand "crypto/rand"
+	"fmt"
+	"math"
+	"math/big"
+	"os"
+	"path"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
+	"github.com/poorlydefinedbehaviour/raft-go/src/constants"
 	"github.com/poorlydefinedbehaviour/raft-go/src/kv"
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
 	"github.com/poorlydefinedbehaviour/raft-go/src/raft"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
 	"github.com/poorlydefinedbehaviour/raft-go/src/storage"
+	testingclock "github.com/poorlydefinedbehaviour/raft-go/src/testing/clock"
 	"github.com/poorlydefinedbehaviour/raft-go/src/testing/network"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
-	"go.uber.org/zap"
 )
 
 type Cluster struct {
-	Replicas []TestReplica
+	Ticks    uint64
+	Config   ClusterConfig
+	Replicas []*TestReplica
+	Clients  []*TestClient
 	Network  *network.Network
 	Bus      *messagebus.MessageBus
+	Rand     *rand.DefaultRandom
 }
 
 type TestReplica struct {
 	*raft.Raft
 	Kv *kv.KvStore
+
+	// Replica is offline until tick.
+	crashedUntilTick uint64
+
+	// Is the replica running right now?
+	isRunning bool
 }
 
-func (cluster *Cluster) Followers() []TestReplica {
-	replicas := make([]TestReplica, 0)
+func (replica *TestReplica) crash(cluster *Cluster) {
+	crashUntilTick := cluster.replicaCrashedUntilTick()
+
+	cluster.debug("CRASHING UNTIL_TICK=%d REPLICA=%d", crashUntilTick, replica.Config.ReplicaID)
+
+	replica.crashedUntilTick = crashUntilTick
+	replica.isRunning = false
+}
+
+func (replica *TestReplica) restart(cluster *Cluster) {
+	cluster.debug("RESTART REPLICA=%d", replica.Config.ReplicaID)
+
+	storage, err := storage.NewFileStorage(replica.Storage.Directory())
+	if err != nil {
+		panic(err)
+	}
+	kv := kv.NewKvStore(cluster.Bus)
+	raft, err := raft.NewRaft(raft.Config{
+		ReplicaID:                replica.Config.ReplicaID,
+		ReplicaAddress:           replica.ReplicaAddress(),
+		Replicas:                 replica.Config.Replicas,
+		MaxLeaderElectionTimeout: replica.Config.MaxLeaderElectionTimeout,
+		MinLeaderElectionTimeout: replica.Config.MinLeaderElectionTimeout,
+		LeaderHeartbeatTimeout:   replica.Config.LeaderHeartbeatTimeout,
+	}, cluster.Bus, storage, kv, cluster.Rand, testingclock.NewClock())
+	if err != nil {
+		panic(err)
+	}
+	replica.Raft = raft
+	replica.crashedUntilTick = 0
+	replica.isRunning = true
+}
+
+func (replica *TestReplica) isAlive(tick uint64) bool {
+	return replica.crashedUntilTick <= tick
+}
+
+type TestClient struct{}
+
+func (client *TestClient) Tick() {
+
+}
+
+func (cluster *Cluster) debug(template string, args ...interface{}) {
+	message := fmt.Sprintf(template, args...)
+
+	message = fmt.Sprintf("CLUSTER: TICK=%d %s\n",
+		cluster.Ticks,
+		message,
+	)
+
+	if constants.Debug {
+		fmt.Println(message)
+	}
+}
+
+func (cluster *Cluster) replicaCrashedUntilTick() uint64 {
+	return cluster.Ticks + cluster.Rand.GenBetween(0, cluster.Config.Raft.MaxReplicaCrashTicks)
+}
+
+func (cluster *Cluster) Followers() []*TestReplica {
+	replicas := make([]*TestReplica, 0)
 
 	for _, replica := range cluster.Replicas {
 		if replica.State() != raft.Leader {
@@ -36,15 +115,15 @@ func (cluster *Cluster) Followers() []TestReplica {
 	return replicas
 }
 
-func (cluster *Cluster) MustWaitForCandidate() TestReplica {
+func (cluster *Cluster) MustWaitForCandidate() *TestReplica {
 	return cluster.mustWaitForReplicaWithStatus(raft.Candidate)
 }
 
-func (cluster *Cluster) MustWaitForLeader() TestReplica {
+func (cluster *Cluster) MustWaitForLeader() *TestReplica {
 	return cluster.mustWaitForReplicaWithStatus(raft.Leader)
 }
 
-func (cluster *Cluster) mustWaitForReplicaWithStatus(state raft.State) TestReplica {
+func (cluster *Cluster) mustWaitForReplicaWithStatus(state raft.State) *TestReplica {
 	const maxTicks = 10_000
 
 	for i := 0; i < maxTicks; i++ {
@@ -75,49 +154,109 @@ func (cluster *Cluster) TickUntilEveryMessageIsDelivered() {
 }
 
 func (cluster *Cluster) Tick() {
+	cluster.Ticks++
+
 	cluster.Bus.Tick()
 	cluster.Network.Tick()
 
+	for _, client := range cluster.Clients {
+		client.Tick()
+	}
+
 	for _, replica := range cluster.Replicas {
-		replica.Tick()
+		if replica.isAlive(cluster.Ticks) {
+			if !replica.isRunning {
+				replica.restart(cluster)
+			}
+
+			replica.Tick()
+
+			// TODO: crashed replicas must restart
+			shouldCrash := cluster.Rand.GenBool(cluster.Config.Raft.ReplicaCrashProbability)
+			if shouldCrash {
+				replica.crash(cluster)
+			}
+		} else {
+			// Replica is dead, advance its clock to avoid leaving it too far behind other replicas.
+			replica.Clock.Tick()
+		}
 	}
 }
 
 func (cluster *Cluster) Leader() *TestReplica {
 	for _, replica := range cluster.Replicas {
 		if replica.Raft.State() == raft.Leader {
-			return &replica
+			return replica
 		}
 	}
 
 	return nil
 }
 
-func Setup() Cluster {
-	log, err := zap.NewProduction(zap.WithCaller(true))
+type ClusterConfig struct {
+	Seed        int64
+	NumReplicas uint16
+	NumClients  uint64
+	Network     network.NetworkConfig
+	Raft        RaftConfig
+}
+
+type RaftConfig struct {
+	ReplicaCrashProbability  float64
+	MaxReplicaCrashTicks     uint64
+	MaxLeaderElectionTimeout time.Duration
+	MinLeaderElectionTimeout time.Duration
+	LeaderHeartbeatTimeout   time.Duration
+}
+
+func defaultConfig() ClusterConfig {
+	bigint, err := cryptorand.Int(cryptorand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {
-		panic(err)
+		panic(fmt.Errorf("generating seed: %w", err))
 	}
-	logger := log.Sugar()
+
+	return ClusterConfig{
+		Seed:        bigint.Int64(),
+		NumReplicas: 3,
+		Network: network.NetworkConfig{
+			PathClogProbability:      0.0,
+			MessageReplayProbability: 0.0,
+			DropMessageProbability:   0.0,
+			MaxNetworkPathClogTicks:  10_000,
+			MaxMessageDelayTicks:     50,
+		},
+		Raft: RaftConfig{
+			ReplicaCrashProbability:  0.0,
+			MaxReplicaCrashTicks:     0,
+			MaxLeaderElectionTimeout: 300 * time.Millisecond,
+			MinLeaderElectionTimeout: 100 * time.Millisecond,
+			LeaderHeartbeatTimeout:   100 * time.Millisecond,
+		},
+	}
+}
+
+func Setup(configs ...ClusterConfig) Cluster {
+	assert.True(len(configs) == 0 || len(configs) == 1, "zero or one configurations are allowed")
+
+	var config ClusterConfig
+	if len(configs) == 0 {
+		config = defaultConfig()
+	} else {
+		config = configs[0]
+	}
 
 	rand := rand.NewRand(0)
 
-	replicaAddresses := []types.ReplicaAddress{"localhost:8001", "localhost:8002", "localhost:8003"}
+	replicaAddresses := make([]types.ReplicaAddress, 0, config.NumReplicas)
+	for i := 1; i <= int(config.NumReplicas); i++ {
+		replicaAddresses = append(replicaAddresses, fmt.Sprintf("localhost:800%d", i))
+	}
 
-	network := network.NewNetwork(network.NetworkConfig{
-		PathClogProbability:      0.0,
-		MessageReplayProbability: 0.0,
-		DropMessageProbability:   0.0,
-		MaxNetworkPathClogTicks:  0,
-		MaxMessageDelayTicks:     0,
-	},
-		logger,
-		rand,
-		replicaAddresses,
-	)
+	network := network.New(config.Network, rand, replicaAddresses)
+
 	bus := messagebus.NewMessageBus(network)
 
-	replicas := make([]TestReplica, 0)
+	replicas := make([]*TestReplica, 0)
 
 	for i, replicaAddress := range replicaAddresses {
 		configReplicas := make([]raft.Replica, 0)
@@ -129,22 +268,33 @@ func Setup() Cluster {
 			configReplicas = append(configReplicas, raft.Replica{ReplicaID: uint16(j + 1), ReplicaAddress: otherReplicaAddress})
 		}
 
-		config := raft.Config{
+		kv := kv.NewKvStore(bus)
+
+		dir := path.Join(os.TempDir(), uuid.NewString())
+		storage, err := storage.NewFileStorage(dir)
+		if err != nil {
+			panic(fmt.Sprintf("instantiating storage: %s", err.Error()))
+		}
+
+		raft, err := raft.NewRaft(raft.Config{
 			ReplicaID:                uint16(i + 1),
 			ReplicaAddress:           replicaAddress,
 			Replicas:                 configReplicas,
-			MaxLeaderElectionTimeout: 300 * time.Millisecond,
-			MinLeaderElectionTimeout: 100 * time.Millisecond,
-			LeaderHeartbeatTimeout:   100 * time.Millisecond,
-		}
-
-		kv := kv.NewKvStore(bus)
-		raft, err := raft.NewRaft(config, bus, storage.NewFileStorage(), kv, rand, logger)
+			MaxLeaderElectionTimeout: config.Raft.MaxLeaderElectionTimeout,
+			MinLeaderElectionTimeout: config.Raft.MinLeaderElectionTimeout,
+			LeaderHeartbeatTimeout:   config.Raft.LeaderHeartbeatTimeout,
+		}, bus, storage, kv, rand, testingclock.NewClock())
 		if err != nil {
 			panic(err)
 		}
-		replicas = append(replicas, TestReplica{Raft: raft, Kv: kv})
+		replicas = append(replicas, &TestReplica{Raft: raft, Kv: kv})
 	}
 
-	return Cluster{Replicas: replicas, Network: network, Bus: bus}
+	clients := make([]*TestClient, 0, config.NumClients)
+
+	for i := 0; i < int(config.NumClients); i++ {
+		clients = append(clients, &TestClient{})
+	}
+
+	return Cluster{Config: config, Replicas: replicas, Clients: clients, Network: network, Bus: bus, Rand: rand}
 }
