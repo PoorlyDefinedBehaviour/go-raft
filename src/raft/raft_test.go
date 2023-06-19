@@ -239,6 +239,26 @@ func TestNewRaft(t *testing.T) {
 	})
 }
 
+func TestTransitoionToState(t *testing.T) {
+	t.Parallel()
+
+	t.Run("when a leader first comes to power, it initializes all nextIndex values to the index just after the last one in its log", func(t *testing.T) {
+		cluster := Setup()
+
+		replica := cluster.Replicas[0]
+
+		assert.NoError(t, replica.transitionToState(Leader))
+
+		for _, otherReplica := range cluster.Replicas {
+			if otherReplica == replica {
+				continue
+			}
+
+			assert.Equal(t, replica.Storage.LastLogIndex()+1, replica.mutableState.nextIndex[otherReplica.Config.ReplicaID])
+		}
+	})
+}
+
 func TestApplyCommittedEntries(t *testing.T) {
 	t.Parallel()
 

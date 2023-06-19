@@ -170,7 +170,7 @@ func NewRaft(
 			},
 			nextLeaderElectionTimeout:  0,
 			nextLeaderHeartbeatTimeout: 0,
-			nextIndex:                  newNextIndex(config.Replicas),
+			nextIndex:                  nil,
 		},
 		rand:            rand,
 		inFlightRequest: nil,
@@ -194,11 +194,11 @@ func NewRaft(
 	return raft, nil
 }
 
-func newNextIndex(replicas []Replica) map[types.ReplicaID]uint64 {
+func newNextIndex(replicas []Replica, nextIndex uint64) map[types.ReplicaID]uint64 {
 	out := make(map[types.ReplicaID]uint64)
 
 	for _, replica := range replicas {
-		out[replica.ReplicaID] = 1
+		out[replica.ReplicaID] = nextIndex
 	}
 
 	return out
@@ -479,6 +479,8 @@ func (raft *Raft) transitionToState(state State) error {
 		if err := raft.Storage.AppendEntries([]types.Entry{{Term: raft.mutableState.currentTermState.term}}); err != nil {
 			return fmt.Errorf("append empty entry after becoming leader: %w", err)
 		}
+		lastLogIndex := raft.Storage.LastLogIndex()
+		raft.mutableState.nextIndex = newNextIndex(raft.Config.Replicas, lastLogIndex+1)
 	case Candidate:
 	case Follower:
 		raft.debug("transitioning to follower")
