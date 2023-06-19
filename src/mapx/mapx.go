@@ -30,3 +30,13 @@ func MinValue[K comparable, V constraints.Ordered](m map[K]V) (V, bool) {
 
 	return min, true
 }
+
+func Keys[K comparable, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
+
+	for key := range m {
+		keys = append(keys, key)
+	}
+
+	return keys
+}

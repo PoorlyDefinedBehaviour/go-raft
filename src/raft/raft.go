@@ -44,9 +44,9 @@ type Raft struct {
 	Config Config
 
 	// Used to send inputs to other replicas.
-	messageBus *messagebus.MessageBus
+	bus *messagebus.MessageBus
 
-	// The state mutated directly by the Raft struct.
+	// The Raft state mutated directly by the Raft struct.
 	mutableState MutableState
 
 	// The state machine being built on top of raft.
@@ -158,7 +158,7 @@ func NewRaft(
 
 	raft := &Raft{
 		Config:       config,
-		messageBus:   messageBus,
+		bus:          messageBus,
 		Storage:      storage,
 		stateMachine: stateMachine,
 		mutableState: MutableState{
@@ -232,10 +232,11 @@ func stateLetter(state State) string {
 func (raft *Raft) debug(template string, args ...interface{}) {
 	message := fmt.Sprintf(template, args...)
 
-	message = fmt.Sprintf("%s(%s) T=%d %s\n",
+	message = fmt.Sprintf("%s(%s) T=%d TICK=%d %s\n",
 		stateLetter(raft.State()),
 		raft.ReplicaAddress(),
 		raft.mutableState.currentTermState.term,
+		raft.Clock.CurrentTick(),
 		message,
 	)
 
@@ -279,7 +280,7 @@ func newInFlightRequest(replicaID types.ReplicaID, doneCh chan error) *request {
 	}
 }
 
-func (raft *Raft) HandleUserRequest(ctx context.Context, typ uint8, value []byte) (*types.UserRequestInput, error) {
+func (raft *Raft) HandleUserRequest(ctx context.Context, typ uint8, value []byte) (chan error, error) {
 	if raft.State() != Leader {
 		return nil, fmt.Errorf("only leaders can handle requests")
 	}
@@ -288,22 +289,17 @@ func (raft *Raft) HandleUserRequest(ctx context.Context, typ uint8, value []byte
 		return nil, fmt.Errorf("request type is reserved. type=%d", typ)
 	}
 
-	userRequest := &types.UserRequestInput{
-		Type:   typ,
-		Value:  value,
-		DoneCh: make(chan error, 1),
-	}
+	// userRequest := &types.UserRequestInput{
+	// 	Type:   typ,
+	// 	Value:  value,
+	// 	DoneCh: make(chan error, 1),
+	// }
 
-	raft.debug("QUEUE USER REQUEST")
-	raft.messageBus.QueueUserRequest(raft.Config.ReplicaAddress, userRequest)
-
-	return userRequest, nil
+	panic("todo")
 }
 
 func (raft *Raft) Tick() {
 	raft.Clock.Tick()
-
-	ctx := context.Background()
 
 	switch raft.mutableState.state {
 	case Follower:
@@ -314,9 +310,7 @@ func (raft *Raft) Tick() {
 			}
 			return
 		}
-		if err := raft.handleMessages(ctx); err != nil {
-			raft.debug("error handling messages: %s", err.Error())
-		}
+
 	case Candidate:
 		if raft.leaderElectionTimeoutFired() {
 			raft.debug("tick=%d candidate: election timeout fired", raft.Clock.CurrentTick())
@@ -326,23 +320,19 @@ func (raft *Raft) Tick() {
 			raft.resetElectionTimeout()
 		}
 
-		if err := raft.handleMessages(ctx); err != nil {
-			raft.debug("error handling messages: %s", err.Error())
-		}
 	case Leader:
 		if raft.leaderHeartbeatTimeoutFired() {
 
 			raft.debug("HEARTBEAT TIMEOUT FIRED")
-			if err := raft.sendHeartbeat(context.Background()); err != nil {
+			if err := raft.sendHeartbeat(); err != nil {
 				raft.error("sending heartbeat: %s", err)
 			}
 		}
-		if err := raft.handleMessages(ctx); err != nil {
-			raft.debug("error handling messages: %s", err.Error())
-		}
+
 	default:
 		panic(fmt.Sprintf("unexpected raft state: %d", raft.mutableState.state))
 	}
+
 }
 
 func (raft *Raft) majority() uint16 {
@@ -392,7 +382,7 @@ func (raft *Raft) startElection() error {
 
 	for _, replica := range raft.Config.Replicas {
 		raft.debug("REQUEST VOTE REPLICA=%d", replica.ReplicaID)
-		raft.messageBus.RequestVote(raft.ReplicaAddress(), replica.ReplicaAddress, types.RequestVoteInput{
+		raft.bus.Send(raft.ReplicaAddress(), replica.ReplicaAddress, &types.RequestVoteInput{
 			CandidateTerm:         raft.mutableState.currentTermState.term,
 			CandidateID:           raft.Config.ReplicaID,
 			CandidateLastLogIndex: 1,
@@ -502,22 +492,23 @@ func (raft *Raft) transitionToState(state State) error {
 	return nil
 }
 
-func (raft *Raft) handleMessages(ctx context.Context) error {
-	// TODO: ensure term is updated to max(message.term, replica.term)
-
-	message, err := raft.messageBus.Receive(raft.ReplicaAddress())
-	if message == nil {
-		return nil
-	}
+func (raft *Raft) OnMessage(from types.ReplicaAddress, message types.Message) {
+	outgoingMessage, err := raft.handleMessage(message)
 	if err != nil {
-		return fmt.Errorf("error receiving message from message bus: %s", err)
+		raft.error("handling message: %s", err)
+		return
 	}
+	if outgoingMessage != nil {
+		raft.bus.Send(raft.ReplicaAddress(), from, outgoingMessage)
+	}
+}
+
+func (raft *Raft) handleMessage(message types.Message) (types.Message, error) {
+	// TODO: ensure term is updated to max(message.term, replica.term)
 
 	switch message := message.(type) {
 	case *types.UserRequestInput:
 		assert.True(raft.State() == Leader, "must be leader to handle user request")
-
-		assert.True(raft.inFlightRequest == nil, "there is a request in flight")
 
 		raft.debug("user request in flight")
 		raft.inFlightRequest = newInFlightRequest(raft.Config.ReplicaID, message.DoneCh)
@@ -529,11 +520,11 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 			Value: message.Value,
 		}}
 		if err := raft.Storage.AppendEntries(entries); err != nil {
-			return fmt.Errorf("appending entries to log: entries=%+v %w", entries, err)
+			return nil, fmt.Errorf("appending entries to log: entries=%+v %w", entries, err)
 		}
 		raft.debug("NEW ENTRIES. SENDING HEARTBEAT")
-		if err := raft.sendHeartbeat(context.Background()); err != nil {
-			return fmt.Errorf("sending heartbeat: %w", err)
+		if err := raft.sendHeartbeat(); err != nil {
+			return nil, fmt.Errorf("sending heartbeat: %w", err)
 		}
 
 	case *types.AppendEntriesInput:
@@ -558,17 +549,16 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 
 		if message.LeaderTerm < raft.mutableState.currentTermState.term {
 			raft.debug("LEADER_TERM=%d leader term is less than the current term", message.LeaderTerm)
-			raft.messageBus.SendAppendEntriesResponse(raft.Config.ReplicaAddress, replica.ReplicaAddress, appendEntriesOutput)
-			return nil
+			return &appendEntriesOutput, nil
 		}
 
 		if message.LeaderTerm >= raft.mutableState.currentTermState.term {
 			raft.debug("AppendEntriesInput LEADER WITH HIGHER TERM")
 			if err := raft.transitionToState(Follower); err != nil {
-				return fmt.Errorf("transitioning to follower after finding a replica with a higher term: %w", err)
+				return nil, fmt.Errorf("transitioning to follower after finding a replica with a higher term: %w", err)
 			}
 			if err := raft.newTerm(withTerm(message.LeaderTerm)); err != nil {
-				return fmt.Errorf("transitioning to new term after finding replica with a higher term: %w", err)
+				return nil, fmt.Errorf("transitioning to new term after finding replica with a higher term: %w", err)
 			}
 		}
 
@@ -577,17 +567,16 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 				message.PreviousLogIndex,
 				raft.Storage.LastLogIndex(),
 			)
-			raft.messageBus.SendAppendEntriesResponse(raft.Config.ReplicaAddress, replica.ReplicaAddress, appendEntriesOutput)
-			return nil
+			return &appendEntriesOutput, nil
 		}
 
 		if message.LeaderTerm >= raft.mutableState.currentTermState.term {
 			raft.debug("AppendEntriesInput leader is up to date")
 			if err := raft.newTerm(withTerm(message.LeaderTerm)); err != nil {
-				return fmt.Errorf("starting new term: %w", err)
+				return nil, fmt.Errorf("starting new term: %w", err)
 			}
 			if err := raft.transitionToState(Follower); err != nil {
-				return fmt.Errorf("transitioning to follower: %w", err)
+				return nil, fmt.Errorf("transitioning to follower: %w", err)
 			}
 		}
 
@@ -595,7 +584,7 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 			raft.debug("AppendEntriesInputmessage.PreviousLogIndex=%d getting entry at index", message.PreviousLogIndex)
 			entry, err := raft.Storage.GetEntryAtIndex(message.PreviousLogIndex)
 			if err != nil && !errors.Is(err, storage.ErrIndexOutOfBounds) {
-				return fmt.Errorf("getting entry at index: index=%d %w", message.PreviousLogIndex, err)
+				return nil, fmt.Errorf("getting entry at index: index=%d %w", message.PreviousLogIndex, err)
 			}
 
 			if entry != nil && entry.Term != message.PreviousLogTerm {
@@ -607,14 +596,14 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 
 				raft.debug("AppendEntriesInput previousLogIndex=%d truncating log", message.PreviousLogIndex)
 				if err := raft.Storage.TruncateLogStartingFrom(message.PreviousLogIndex); err != nil {
-					return fmt.Errorf("truncating log: index=%d %w", message.PreviousLogIndex, err)
+					return nil, fmt.Errorf("truncating log: index=%d %w", message.PreviousLogIndex, err)
 				}
 			}
 		}
 
 		raft.debug("AppendEntriesInput append entries to log")
 		if err := raft.Storage.AppendEntries(message.Entries); err != nil {
-			return fmt.Errorf("appending entries to log: entries=%+v %w", message.Entries, err)
+			return nil, fmt.Errorf("appending entries to log: entries=%+v %w", message.Entries, err)
 		}
 
 		raft.resetElectionTimeout()
@@ -625,19 +614,22 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 				raft.mutableState.commitIndex,
 			)
 			if err := raft.applyCommittedEntries(message.LeaderCommitIndex, raft.Storage.LastLogIndex()); err != nil {
-				return fmt.Errorf("applying uncomitted entries: leaderCommitIndex=%d lastLogIndex=%d %w", message.LeaderCommitIndex, raft.Storage.LastLogIndex(), err)
+				return nil, fmt.Errorf("applying uncomitted entries: leaderCommitIndex=%d lastLogIndex=%d %w", message.LeaderCommitIndex, raft.Storage.LastLogIndex(), err)
 			}
 		}
 
 		raft.mutableState.currentTermState.term = message.LeaderTerm
 
-		raft.messageBus.SendAppendEntriesResponse(raft.Config.ReplicaAddress, replica.ReplicaAddress, types.AppendEntriesOutput{
+		raft.bus.Send(raft.Config.ReplicaAddress, replica.ReplicaAddress, &types.AppendEntriesOutput{
 			ReplicaID:        raft.Config.ReplicaID,
 			CurrentTerm:      raft.mutableState.currentTermState.term,
 			Success:          true,
 			PreviousLogIndex: raft.Storage.LastLogIndex(),
 			PreviousLogTerm:  raft.Storage.LastLogTerm(),
 		})
+
+		appendEntriesOutput.Success = true
+		return &appendEntriesOutput, nil
 
 	case *types.AppendEntriesOutput:
 		raft.debug("AppendEntriesOutput TERM=%d REPLICA=%d SUCCESS=%t PREVIOUS_LOG_INDEX=%d PREVIOUS_LOG_TERM=%d",
@@ -655,14 +647,11 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 			break
 		}
 
-		// TODO: use something like sync.Once? (don't need the mutex)
-		if len(raft.inFlightRequest.successes) >= int(raft.majority()) ||
-			len(raft.inFlightRequest.failures) >= int(raft.majority()) {
-			raft.debug("AppendEntriesOutput IGNORE(GOT QUORUM) TERM=%d REPLICA=%d", message.CurrentTerm, message.ReplicaID)
-			break
+		if message.Success {
+			raft.inFlightRequest.successes[message.ReplicaID] = true
+		} else {
+			raft.inFlightRequest.failures[message.ReplicaID] = true
 		}
-
-		raft.inFlightRequest.successes[message.ReplicaID] = message.Success
 
 		if len(raft.inFlightRequest.successes) == int(raft.majority()) {
 			if raft.inFlightRequest.doneCh != nil {
@@ -670,14 +659,12 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 				raft.inFlightRequest.doneCh <- nil
 				close(raft.inFlightRequest.doneCh)
 			}
-			raft.inFlightRequest = nil
 		} else if len(raft.inFlightRequest.failures) == int(raft.majority()) {
 			if raft.inFlightRequest.doneCh != nil {
 				raft.debug("handleMessages: send ErrNoQuorum to done channel")
 				raft.inFlightRequest.doneCh <- ErrNoQuorum
 				close(raft.inFlightRequest.doneCh)
 			}
-			raft.inFlightRequest = nil
 		}
 
 	case *types.RequestVoteInput:
@@ -688,28 +675,25 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 			message.CandidateLastLogTerm,
 		)
 
-		replica := findReplicaByID(raft.Config.Replicas, message.CandidateID)
-
 		// Receiver implementation:
 		// 1. Reply false if term < currentTerm (§5.1)
 		// 2. If votedFor is null or candidateId, and candidate’s log is at
 		// least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
 		if message.CandidateTerm < raft.mutableState.currentTermState.term {
 			raft.debug("RequestVoteInput andidateTerm=%d replicaTerm=%d candidate term is less than replica term, not granting vote", message.CandidateTerm, raft.mutableState.currentTermState.term)
-			raft.messageBus.SendRequestVoteResponse(raft.Config.ReplicaAddress, replica.ReplicaAddress, types.RequestVoteOutput{
+			return &types.RequestVoteOutput{
 				CurrentTerm: raft.mutableState.currentTermState.term,
 				VoteGranted: false,
-			})
-			return nil
+			}, nil
 		}
 
 		if message.CandidateTerm >= raft.mutableState.currentTermState.term {
 			raft.debug("RequestVoteInput candidate is up to date")
 			if err := raft.newTerm(withTerm(message.CandidateTerm)); err != nil {
-				return fmt.Errorf("starting new term: %w", err)
+				return nil, fmt.Errorf("starting new term: %w", err)
 			}
 			if err := raft.transitionToState(Follower); err != nil {
-				return fmt.Errorf("transitioning to follower: %w", err)
+				return nil, fmt.Errorf("transitioning to follower: %w", err)
 			}
 		}
 
@@ -728,31 +712,31 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 
 		if voteGranted {
 			if err := raft.voteFor(message.CandidateID, message.CandidateTerm); err != nil {
-				return fmt.Errorf("voting for candidate: candidateID=%d candidateTerm=%d %w err", message.CandidateID, message.CandidateTerm, err)
+				return nil, fmt.Errorf("voting for candidate: candidateID=%d candidateTerm=%d %w err", message.CandidateID, message.CandidateTerm, err)
 			}
 			if err := raft.transitionToState(Follower); err != nil {
-				return fmt.Errorf("transitioning to follower: %w", err)
+				return nil, fmt.Errorf("transitioning to follower: %w", err)
 			}
 		}
 
 		// TODO max(term)
 
-		raft.messageBus.SendRequestVoteResponse(raft.ReplicaAddress(), replica.ReplicaAddress, types.RequestVoteOutput{
+		return &types.RequestVoteOutput{
 			CurrentTerm: raft.mutableState.currentTermState.term,
 			VoteGranted: voteGranted,
-		})
+		}, nil
 
 	case *types.RequestVoteOutput:
 		raft.debug("RequestVoteOutput REPLICA=%d REPLICA_TERM=%d VOTE_GRANTED=%t ", message.ReplicaID, message.CurrentTerm, message.VoteGranted)
 
 		if message.CurrentTerm > raft.mutableState.currentTermState.term {
 			if err := raft.newTerm(withTerm(message.CurrentTerm)); err != nil {
-				return fmt.Errorf("starting new term: %w", err)
+				return nil, fmt.Errorf("starting new term: %w", err)
 			}
 			if err := raft.transitionToState(Follower); err != nil {
-				return fmt.Errorf("transitioning to follower: %w", err)
+				return nil, fmt.Errorf("transitioning to follower: %w", err)
 			}
-			return nil
+			return nil, nil
 		}
 
 		if raft.hasReceivedVote(message) {
@@ -760,11 +744,11 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 
 			if raft.votesReceived() >= raft.majority() {
 				if err := raft.transitionToState(Leader); err != nil {
-					return fmt.Errorf("transitioning to leader: %w", err)
+					return nil, fmt.Errorf("transitioning to leader: %w", err)
 				}
 				// Send empty heartbeat to avoid the other replicas election timeouts.
 				raft.debug("NEW LEADER. SENDING HEARTBEAT")
-				if err := raft.sendHeartbeat(ctx); err != nil {
+				if err := raft.sendHeartbeat(); err != nil {
 					raft.error("sending heartbeat: %s", err)
 				}
 			}
@@ -773,7 +757,7 @@ func (raft *Raft) handleMessages(ctx context.Context) error {
 		panic(fmt.Sprintf("unexpected message: %+v", message))
 	}
 
-	return nil
+	return nil, nil
 }
 
 func (raft *Raft) votesReceived() uint16 {
@@ -800,9 +784,7 @@ func (raft *Raft) getNextBatchForReplica(replicaID types.ReplicaID) ([]types.Ent
 	return entries, nil
 }
 
-func (raft *Raft) sendHeartbeat(ctx context.Context) error {
-	assert.True(raft.inFlightRequest == nil, "there is a request in flight")
-
+func (raft *Raft) sendHeartbeat() error {
 	raft.debug("heartbeat in flight")
 	raft.inFlightRequest = newInFlightRequest(raft.Config.ReplicaID, nil)
 
@@ -827,15 +809,14 @@ func (raft *Raft) sendHeartbeat(ctx context.Context) error {
 
 		raft.debug("REPLICA=%d ENTRIES=%d PREVIOUS_LOG_INDEX=%d PREVIOUS_LOG_TERM=%d", replica.ReplicaID, len(entries), previousLogIndex, previousLogTerm)
 
-		raft.messageBus.SendAppendEntriesRequest(raft.ReplicaAddress(), replica.ReplicaAddress, types.AppendEntriesInput{
+		raft.bus.Send(raft.ReplicaAddress(), replica.ReplicaAddress, &types.AppendEntriesInput{
 			LeaderID:          raft.Config.ReplicaID,
 			LeaderTerm:        raft.mutableState.currentTermState.term,
 			LeaderCommitIndex: raft.mutableState.commitIndex,
 			PreviousLogIndex:  previousLogIndex,
 			PreviousLogTerm:   uint64(previousLogTerm),
 			Entries:           entries,
-		},
-		)
+		})
 
 		// TODO: shouldn't advance next index if request does not succeed
 		raft.mutableState.nextIndex[replica.ReplicaID] += uint64(len(entries))

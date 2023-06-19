@@ -2,6 +2,7 @@ package raft
 
 import (
 	cryptorand "crypto/rand"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -164,7 +165,6 @@ func Setup(configs ...ClusterConfig) Cluster {
 		MaxMessageDelayTicks:     0,
 	},
 		rand,
-		replicaAddresses,
 	)
 	bus := messagebus.NewMessageBus(network)
 
@@ -204,6 +204,12 @@ func Setup(configs ...ClusterConfig) Cluster {
 		replicas = append(replicas, TestReplica{Raft: raft, Kv: kv})
 	}
 
+	replicasOnMessage := make(map[types.ReplicaAddress]types.MessageFunc)
+	for _, replica := range replicas {
+		replicasOnMessage[replica.Config.ReplicaAddress] = replica.OnMessage
+	}
+	network.Setup(replicasOnMessage)
+
 	return Cluster{Config: config, Replicas: replicas, Network: network, Bus: bus, Rand: rand}
 }
 
@@ -226,7 +232,7 @@ func TestNewRaft(t *testing.T) {
 		storage, err := storage.NewFileStorage(replica.Storage.Directory())
 		assert.NoError(t, err)
 
-		replicaAfterRestart, err := NewRaft(replica.Config, replica.messageBus, storage, kv, cluster.Rand, testingclock.NewClock())
+		replicaAfterRestart, err := NewRaft(replica.Config, replica.bus, storage, kv, cluster.Rand, testingclock.NewClock())
 		assert.NoError(t, err)
 
 		assert.True(t, replicaAfterRestart.VotedForCandidateInCurrentTerm(candidate.Config.ReplicaID))
@@ -378,5 +384,392 @@ func TestRemoveByReplicaID(t *testing.T) {
 		actual := removeByReplicaID(replicas, replicaToRemove.ReplicaID)
 
 		assert.NotContains(t, actual, replicaToRemove)
+	})
+}
+
+func TestHandleMessageAppendEntriesInput(t *testing.T) {
+	t.Parallel()
+
+	t.Run("leader term is smaller than the replica term, success=false", func(t *testing.T) {
+		t.Parallel()
+
+		const term = 2
+
+		cluster := Setup()
+
+		leader := cluster.Replicas[0]
+		replica := cluster.Replicas[1]
+
+		assert.NoError(t, replica.newTerm(withTerm(term)))
+
+		inputMessage := types.AppendEntriesInput{
+			LeaderID: leader.Config.ReplicaID,
+			// And the leader is at term 1.
+			LeaderTerm:        1,
+			LeaderCommitIndex: 0,
+			PreviousLogIndex:  0,
+			PreviousLogTerm:   0,
+			Entries:           make([]types.Entry, 0),
+		}
+
+		outgoingMessage, err := replica.handleMessage(&inputMessage)
+		assert.NoError(t, err)
+
+		expected := &types.AppendEntriesOutput{
+			ReplicaID:        replica.Config.ReplicaID,
+			CurrentTerm:      term,
+			Success:          false,
+			PreviousLogIndex: 0,
+			PreviousLogTerm:  0,
+		}
+
+		assert.Equal(t, expected, outgoingMessage)
+	})
+
+	t.Run("leader message previous log index is not the same as the replicas last log index, success=false", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		leader := cluster.Replicas[0]
+		replica := cluster.Replicas[1]
+
+		appendEntriesInput := types.AppendEntriesInput{
+			LeaderID:          leader.Config.ReplicaID,
+			LeaderTerm:        leader.mutableState.currentTermState.term,
+			LeaderCommitIndex: 0,
+			PreviousLogIndex:  1,
+			PreviousLogTerm:   1,
+			Entries:           make([]types.Entry, 0),
+		}
+
+		outgoingMessage, err := replica.handleMessage(&appendEntriesInput)
+		assert.NoError(t, err)
+
+		expected := &types.AppendEntriesOutput{
+			ReplicaID:        replica.Config.ReplicaID,
+			CurrentTerm:      leader.Term(),
+			Success:          false,
+			PreviousLogIndex: 0,
+			PreviousLogTerm:  0,
+		}
+
+		assert.Equal(t, expected, outgoingMessage)
+	})
+
+	t.Run("replica has entry with a different term at index, should truncate replica's log", func(t *testing.T) {
+		t.Parallel()
+
+		// TODO
+	})
+
+	t.Run("appends entries to the log, success=true", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		leader := cluster.Replicas[0]
+		replica := cluster.Replicas[1]
+
+		inputMessage := types.AppendEntriesInput{
+			LeaderID:          leader.Config.ReplicaID,
+			LeaderTerm:        leader.Term(),
+			LeaderCommitIndex: 0,
+			PreviousLogIndex:  0,
+			PreviousLogTerm:   0,
+			Entries: []types.Entry{
+				{
+					Term: 2,
+				},
+			},
+		}
+
+		outgoingMessage, err := replica.handleMessage(&inputMessage)
+		assert.NoError(t, err)
+
+		expected := &types.AppendEntriesOutput{
+			ReplicaID:        replica.Config.ReplicaID,
+			CurrentTerm:      leader.Term(),
+			Success:          true,
+			PreviousLogIndex: 0,
+			PreviousLogTerm:  0,
+		}
+
+		assert.Equal(t, expected, outgoingMessage)
+
+		entry, err := replica.Storage.GetEntryAtIndex(1)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(2), entry.Term)
+	})
+
+	t.Run("leader commit index is greater than the replica commit index, should apply entries to state machine", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		leader := cluster.Replicas[0]
+		replica := cluster.Replicas[1]
+
+		assert.NoError(t, leader.newTerm(withTerm(1)))
+
+		entryValue, err := json.Marshal(map[string]any{
+			"key":   "key1",
+			"value": []byte("value1"),
+		})
+		assert.NoError(t, err)
+
+		_, err = replica.handleMessage(&types.AppendEntriesInput{
+			LeaderID:          leader.Config.ReplicaID,
+			LeaderTerm:        leader.mutableState.currentTermState.term,
+			LeaderCommitIndex: leader.mutableState.commitIndex,
+			PreviousLogIndex:  0,
+			PreviousLogTerm:   0,
+			Entries: []types.Entry{
+				{
+					Term:  leader.mutableState.currentTermState.term,
+					Type:  2,
+					Value: entryValue,
+				},
+			},
+		})
+		assert.NoError(t, err)
+
+		assert.NoError(t, leader.newTerm(withTerm(2)))
+		leader.mutableState.commitIndex = 1
+
+		entryValue, err = json.Marshal(map[string]string{
+			"key":   "key2",
+			"value": "value2",
+		})
+		assert.NoError(t, err)
+
+		outgoingMessage, err := replica.handleMessage(&types.AppendEntriesInput{
+			LeaderID:          leader.Config.ReplicaID,
+			LeaderTerm:        leader.mutableState.currentTermState.term,
+			LeaderCommitIndex: leader.mutableState.commitIndex,
+			PreviousLogIndex:  1,
+			PreviousLogTerm:   leader.mutableState.currentTermState.term - 1,
+			Entries: []types.Entry{
+				{
+					Term:  leader.mutableState.currentTermState.term,
+					Type:  2,
+					Value: entryValue,
+				},
+			},
+		})
+		assert.NoError(t, err)
+
+		response := outgoingMessage.(*types.AppendEntriesOutput)
+		assert.True(t, response.Success)
+
+		// First entry has been applied.
+		value, ok := replica.Kv.Get("key1")
+		assert.True(t, ok)
+		assert.Equal(t, []byte("value1"), value)
+
+		// Second entry has not been applied yet.
+		_, ok = replica.Kv.Get("key2")
+		assert.False(t, ok)
+	})
+
+	t.Run("replica updates its term if it is out of date", func(t *testing.T) {
+		t.Parallel()
+
+		// TODO
+	})
+}
+
+func TestHandleMessageUserRequestInput(t *testing.T) {
+	t.Parallel()
+
+	t.Run("request completes after entries being replicated to the majority of replicas", func(t *testing.T) {
+		t.Parallel()
+
+		// TODO
+
+		// cluster := Setup()
+
+		// leader := cluster.MustWaitForLeader()
+
+		// value, err := json.Marshal(map[string]any{
+		// 	"key":   "key",
+		// 	"value": []byte("value"),
+		// })
+		// assert.NoError(t, err)
+
+		// doneCh, err := leader.HandleUserRequest(context.Background(), kv.SetCommand, value)
+		// assert.NoError(t, err)
+		// fmt.Printf("\n\naaaaaaa doneCh %+v\n\n", doneCh)
+
+		// cluster.TickUntilEveryMessageIsDelivered()
+
+		// fmt.Printf("\n\naaaaaaa before err = <-request.DoneCh\n\n")
+		// err = <-doneCh
+		// assert.NoError(t, err)
+		// fmt.Printf("\n\naaaaaaa after err = <-request.DoneCh\n\n")
+
+		// for i := 1; i <= int(leader.Storage.LastLogIndex()); i++ {
+		// 	leaderEntry, err := leader.Storage.GetEntryAtIndex(uint64(i))
+		// 	assert.NoError(t, err)
+
+		// 	for _, replica := range cluster.Followers() {
+		// 		replicaEntry, err := replica.Storage.GetEntryAtIndex(uint64(i))
+		// 		assert.NoError(t, err)
+		// 		assert.Equal(t, *leaderEntry, *replicaEntry)
+		// 	}
+		// }
+	})
+}
+
+func TestHandleMessageRequestVoteInput(t *testing.T) {
+	t.Parallel()
+
+	t.Run("candidate's term is less than the replica's term, should not grant vote", func(t *testing.T) {
+		t.Parallel()
+
+		env := Setup()
+
+		candidate := env.Replicas[0]
+		replica := env.Replicas[1]
+
+		assert.NoError(t, replica.newTerm(withTerm(1)))
+
+		outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+			CandidateID:           candidate.Config.ReplicaID,
+			CandidateTerm:         0,
+			CandidateLastLogIndex: 0,
+			CandidateLastLogTerm:  0,
+		})
+		assert.NoError(t, err)
+
+		response := outgoingMessage.(*types.RequestVoteOutput)
+		assert.False(t, response.VoteGranted)
+		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
+	})
+
+	t.Run("candidate's log is smaller than the replica's log, should not grante vote", func(t *testing.T) {
+		t.Parallel()
+
+		env := Setup()
+
+		candidate := env.Replicas[0]
+		replica := env.Replicas[1]
+
+		assert.NoError(t, replica.Storage.AppendEntries([]types.Entry{{Term: 0}}))
+
+		outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+			CandidateID:           candidate.Config.ReplicaID,
+			CandidateTerm:         0,
+			CandidateLastLogIndex: 0,
+			CandidateLastLogTerm:  0,
+		})
+		assert.NoError(t, err)
+
+		response := outgoingMessage.(*types.RequestVoteOutput)
+		assert.False(t, response.VoteGranted)
+		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
+	})
+
+	t.Run("candidate last log term is smaller than the replica's last log term, should not grant vote", func(t *testing.T) {
+		t.Parallel()
+
+		env := Setup()
+
+		candidate := env.Replicas[0]
+		replica := env.Replicas[1]
+
+		assert.NoError(t, replica.Storage.AppendEntries([]types.Entry{{Term: 1}}))
+
+		outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+			CandidateID:           candidate.Config.ReplicaID,
+			CandidateTerm:         1,
+			CandidateLastLogIndex: 1,
+			CandidateLastLogTerm:  0,
+		})
+		assert.NoError(t, err)
+
+		response := outgoingMessage.(*types.RequestVoteOutput)
+		assert.False(t, response.VoteGranted)
+		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
+	})
+
+	t.Run("candidate log is up to date and replica has not voted yet, should grant vote", func(t *testing.T) {
+		t.Parallel()
+
+		env := Setup()
+
+		candidate := env.Replicas[0]
+		replica := env.Replicas[1]
+
+		outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+			CandidateID:           candidate.Config.ReplicaID,
+			CandidateTerm:         0,
+			CandidateLastLogIndex: 0,
+			CandidateLastLogTerm:  0,
+		})
+		assert.NoError(t, err)
+
+		response := outgoingMessage.(*types.RequestVoteOutput)
+		assert.True(t, response.VoteGranted)
+		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
+	})
+
+	t.Run("candidate log is up to date and replica has already voted for the candidate, should grant vote to same candidate again", func(t *testing.T) {
+		t.Parallel()
+
+		env := Setup()
+
+		candidate := env.Replicas[0]
+		replica := env.Replicas[1]
+
+		for i := 0; i < 2; i++ {
+			outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+				CandidateID:           candidate.Config.ReplicaID,
+				CandidateTerm:         0,
+				CandidateLastLogIndex: 0,
+				CandidateLastLogTerm:  0,
+			})
+			assert.NoError(t, err)
+
+			response := outgoingMessage.(*types.RequestVoteOutput)
+			assert.True(t, response.VoteGranted)
+			assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
+		}
+	})
+
+	t.Run("candidate log is up to date but replica voted for another candidate already, should not grant vote", func(t *testing.T) {
+		t.Parallel()
+
+		env := Setup()
+
+		candidateA := env.Replicas[0]
+		candidateB := env.Replicas[1]
+		replica := env.Replicas[2]
+
+		// Request vote for candidate A.
+		outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+			CandidateID:           candidateA.Config.ReplicaID,
+			CandidateTerm:         0,
+			CandidateLastLogIndex: 0,
+			CandidateLastLogTerm:  0,
+		})
+		assert.NoError(t, err)
+
+		response := outgoingMessage.(*types.RequestVoteOutput)
+		assert.True(t, response.VoteGranted)
+		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
+
+		// Request vote for candidate B
+		outgoingMessage, err = replica.handleMessage(&types.RequestVoteInput{
+			CandidateID:           candidateB.Config.ReplicaID,
+			CandidateTerm:         0,
+			CandidateLastLogIndex: 0,
+			CandidateLastLogTerm:  0,
+		})
+		assert.NoError(t, err)
+
+		response = outgoingMessage.(*types.RequestVoteOutput)
+		assert.False(t, response.VoteGranted)
+		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
 	})
 }

@@ -1,0 +1,15 @@
+# 2023/06/18 21:11:29.775752 [TestRingBuffer] [rapid] draw ringSize: 0x0
+# 2023/06/18 21:11:29.775836 [TestRingBuffer] 
+# 	Error Trace:	/Users/brunofelipefrancisco/dev/go-raft/src/ringbuffer/ringbuffer_test.go:19
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:367
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:376
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:202
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:117
+# 	            				/Users/brunofelipefrancisco/dev/go-raft/src/ringbuffer/ringbuffer_test.go:14
+# 	Error:      	Received unexpected error:
+# 	            	size must be greater than 0
+# 	Test:       	TestRingBuffer
+# 
+v0.4.8#8972129620401599029
+0x289d05961e975
+0x0

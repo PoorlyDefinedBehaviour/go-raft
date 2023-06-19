@@ -1,0 +1,17 @@
+# 2023/06/18 23:04:36.528219 [TestClock] [rapid] draw n: 1
+# 2023/06/18 23:04:36.528351 [TestClock] 
+# 	Error Trace:	/Users/brunofelipefrancisco/dev/go-raft/src/testing/clock/clock_test.go:25
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:367
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:376
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:202
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:117
+# 	            				/Users/brunofelipefrancisco/dev/go-raft/src/testing/clock/clock_test.go:13
+# 	Error:      	Not equal: 
+# 	            	expected: int64(1)
+# 	            	actual  : uint64(0x1)
+# 	Test:       	TestClock
+# 
+v0.4.8#4058421386034727214
+0xa2d589da9333
+0x55d0768d13bfb
+0x1

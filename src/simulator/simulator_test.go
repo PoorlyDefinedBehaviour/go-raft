@@ -44,14 +44,15 @@ func TestSimulate(t *testing.T) {
 	})
 
 	for i := 0; i < 500; i++ {
-		if i%100 == 0 {
-			fmt.Printf("\n--- SIMULATION TICK %d ---\n\n", i)
-		}
-
 		cluster.Tick()
 
 		ensureTheresZeroOrOneLeader(t, &cluster)
+		ensureLogConsistency(t, &cluster)
 	}
+}
+
+func ensureLogConsistency(t *testing.T, cluster *testingcluster.Cluster) {
+	// TODO
 }
 
 func ensureTheresZeroOrOneLeader(t *testing.T, cluster *testingcluster.Cluster) {

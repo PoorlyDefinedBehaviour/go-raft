@@ -1,11 +1,8 @@
 package raft
 
 import (
-	"context"
-	"encoding/json"
 	"testing"
 
-	"github.com/poorlydefinedbehaviour/raft-go/src/kv"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -14,43 +11,6 @@ func TestSendHeartbeat(t *testing.T) {
 	t.Parallel()
 
 	// TODO
-}
-
-func TestHandleUserRequest(t *testing.T) {
-	t.Parallel()
-
-	t.Run("request completes after entries being replicated to the majority of replicas", func(t *testing.T) {
-		t.Parallel()
-
-		cluster := Setup()
-
-		leader := cluster.MustWaitForLeader()
-
-		value, err := json.Marshal(map[string]any{
-			"key":   "key",
-			"value": []byte("value"),
-		})
-		assert.NoError(t, err)
-
-		request, err := leader.HandleUserRequest(context.Background(), kv.SetCommand, value)
-		assert.NoError(t, err)
-
-		cluster.TickUntilEveryMessageIsDelivered()
-
-		err = <-request.DoneCh
-		assert.NoError(t, err)
-
-		for i := 1; i <= int(leader.Storage.LastLogIndex()); i++ {
-			leaderEntry, err := leader.Storage.GetEntryAtIndex(uint64(i))
-			assert.NoError(t, err)
-
-			for _, replica := range cluster.Followers() {
-				replicaEntry, err := replica.Storage.GetEntryAtIndex(uint64(i))
-				assert.NoError(t, err)
-				assert.Equal(t, *leaderEntry, *replicaEntry)
-			}
-		}
-	})
 }
 
 func TestLeaderFSM(t *testing.T) {
@@ -70,7 +30,7 @@ func TestLeaderFSM(t *testing.T) {
 			newLeader := cluster.Replicas[1]
 			assert.NoError(t, newLeader.newTerm(withTerm(oldLeader.mutableState.currentTermState.term+1)))
 			assert.NoError(t, newLeader.transitionToState(Leader))
-			assert.NoError(t, newLeader.sendHeartbeat(context.Background()))
+			assert.NoError(t, newLeader.sendHeartbeat())
 
 			cluster.Bus.Tick()
 			cluster.Network.Tick()
@@ -93,7 +53,7 @@ func TestLeaderFSM(t *testing.T) {
 
 			assert.NoError(t, candidate.newTerm(withTerm(leader.mutableState.currentTermState.term+1)))
 
-			cluster.Bus.RequestVote(candidate.ReplicaAddress(), leader.ReplicaAddress(), types.RequestVoteInput{
+			cluster.Bus.Send(candidate.ReplicaAddress(), leader.ReplicaAddress(), &types.RequestVoteInput{
 				CandidateID:           candidate.Config.ReplicaID,
 				CandidateTerm:         candidate.mutableState.currentTermState.term,
 				CandidateLastLogIndex: 0,
@@ -123,25 +83,26 @@ func TestLeaderFSM(t *testing.T) {
 			leader.Tick()
 		}
 
-		cluster.Network.Tick()
-
 		// Ensure leader sent heartbeat to followers.
 		for _, replica := range cluster.Followers() {
-			message, err := cluster.Bus.Receive(replica.ReplicaAddress())
-			assert.NoError(t, err)
+			messages := cluster.Network.MessagesFromTo(leader.ReplicaAddress(), replica.ReplicaAddress())
 
-			response := message.(*types.AppendEntriesInput)
+			// 1 message because of the heartbeat sent by the newly elected leader.
+			// 1 message sent because of the heartbeat after the heartbeat timeout fired.
+			assert.Equal(t, 2, len(messages))
 
-			assert.Equal(t, &types.AppendEntriesInput{
+			expected := &types.AppendEntriesInput{
 				LeaderID:          leader.Config.ReplicaID,
 				LeaderTerm:        leader.mutableState.currentTermState.term,
 				LeaderCommitIndex: leader.mutableState.commitIndex,
 				PreviousLogIndex:  leader.Storage.LastLogIndex(),
 				PreviousLogTerm:   leader.Storage.LastLogTerm(),
 				Entries:           make([]types.Entry, 0),
-			},
-				response,
-			)
+			}
+
+			for _, message := range messages {
+				assert.Equal(t, expected, message)
+			}
 		}
 	})
 
@@ -176,7 +137,7 @@ func TestLeaderFSM(t *testing.T) {
 			assert.NoError(t, leader.transitionToState(Leader))
 
 			// Will send the empty entry to replicas.
-			assert.NoError(t, leader.sendHeartbeat(context.Background()))
+			assert.NoError(t, leader.sendHeartbeat())
 
 			// Sent one entry to each replica, next entry index starts at 2.
 			for _, replica := range cluster.Followers() {
@@ -205,7 +166,7 @@ func TestLeaderFSM(t *testing.T) {
 			))
 
 			// Will send entries at index 1 and 2 to replicas.
-			assert.NoError(t, leader.sendHeartbeat(context.Background()))
+			assert.NoError(t, leader.sendHeartbeat())
 
 			// Next entry starts at index 3.
 			for _, replica := range cluster.Followers() {

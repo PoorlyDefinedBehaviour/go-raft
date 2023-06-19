@@ -46,7 +46,7 @@ type TestReplica struct {
 func (replica *TestReplica) crash(cluster *Cluster) {
 	crashUntilTick := cluster.replicaCrashedUntilTick()
 
-	cluster.debug("CRASHING UNTIL_TICK=%d REPLICA=%d", crashUntilTick, replica.Config.ReplicaID)
+	cluster.debug("CRASH UNTIL_TICK=%d REPLICA=%d", crashUntilTick, replica.Config.ReplicaID)
 
 	replica.crashedUntilTick = crashUntilTick
 	replica.isRunning = false
@@ -67,11 +67,12 @@ func (replica *TestReplica) restart(cluster *Cluster) {
 		MaxLeaderElectionTimeout: replica.Config.MaxLeaderElectionTimeout,
 		MinLeaderElectionTimeout: replica.Config.MinLeaderElectionTimeout,
 		LeaderHeartbeatTimeout:   replica.Config.LeaderHeartbeatTimeout,
-	}, cluster.Bus, storage, kv, cluster.Rand, testingclock.NewClock())
+	}, cluster.Bus, storage, kv, cluster.Rand, replica.Clock)
 	if err != nil {
 		panic(err)
 	}
 	replica.Raft = raft
+	replica.Kv = kv
 	replica.crashedUntilTick = 0
 	replica.isRunning = true
 }
@@ -159,23 +160,22 @@ func (cluster *Cluster) Tick() {
 	cluster.Bus.Tick()
 	cluster.Network.Tick()
 
-	for _, client := range cluster.Clients {
-		client.Tick()
-	}
+	// for _, client := range cluster.Clients {
+	// 	client.Tick()
+	// }
 
 	for _, replica := range cluster.Replicas {
 		if replica.isAlive(cluster.Ticks) {
-			if !replica.isRunning {
-				replica.restart(cluster)
-			}
+			// if !replica.isRunning {
+			// 	replica.restart(cluster)
+			// }
 
 			replica.Tick()
 
-			// TODO: crashed replicas must restart
-			shouldCrash := cluster.Rand.GenBool(cluster.Config.Raft.ReplicaCrashProbability)
-			if shouldCrash {
-				replica.crash(cluster)
-			}
+			// shouldCrash := cluster.Rand.GenBool(cluster.Config.Raft.ReplicaCrashProbability)
+			// if shouldCrash {
+			// 		replica.crash(cluster)
+			// }
 		} else {
 			// Replica is dead, advance its clock to avoid leaving it too far behind other replicas.
 			replica.Clock.Tick()
@@ -252,7 +252,7 @@ func Setup(configs ...ClusterConfig) Cluster {
 		replicaAddresses = append(replicaAddresses, fmt.Sprintf("localhost:800%d", i))
 	}
 
-	network := network.New(config.Network, rand, replicaAddresses)
+	network := network.New(config.Network, rand)
 
 	bus := messagebus.NewMessageBus(network)
 
@@ -287,8 +287,14 @@ func Setup(configs ...ClusterConfig) Cluster {
 		if err != nil {
 			panic(err)
 		}
-		replicas = append(replicas, &TestReplica{Raft: raft, Kv: kv})
+		replicas = append(replicas, &TestReplica{Raft: raft, Kv: kv, isRunning: true})
 	}
+
+	replicasOnMessage := make(map[types.ReplicaAddress]types.MessageFunc)
+	for _, replica := range replicas {
+		replicasOnMessage[replica.Config.ReplicaAddress] = replica.OnMessage
+	}
+	network.Setup(replicasOnMessage)
 
 	clients := make([]*TestClient, 0, config.NumClients)
 

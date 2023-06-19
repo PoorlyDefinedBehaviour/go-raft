@@ -3,6 +3,8 @@ package types
 // Type used by raft empty heartbeat entries.
 const HeartbeatEntryType = 1
 
+type MessageFunc = func(ReplicaAddress, Message)
+
 type ReplicaID = uint16
 
 type ReplicaAddress = string
@@ -78,7 +80,7 @@ func (*RequestVoteOutput) Message() {
 }
 
 type Network interface {
-	Receive(replicaAddress ReplicaAddress) (Message, error)
+	MessagesFromTo(from, to ReplicaAddress) []Message
 	Send(fromReplicaAddress, toReplicaAddress ReplicaAddress, message Message)
 }
 

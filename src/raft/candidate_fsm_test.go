@@ -25,7 +25,7 @@ func TestCandidateFSM(t *testing.T) {
 			assert.NoError(t, leader.transitionToState(Leader))
 			assert.NoError(t, leader.newTerm(withTerm(candidate.mutableState.currentTermState.term+1)))
 
-			cluster.Bus.SendAppendEntriesRequest(leader.ReplicaAddress(), candidate.ReplicaAddress(), types.AppendEntriesInput{
+			outgoingMessage, err := candidate.handleMessage(&types.AppendEntriesInput{
 				LeaderID:          leader.Config.ReplicaID,
 				LeaderTerm:        leader.mutableState.currentTermState.term,
 				LeaderCommitIndex: 0,
@@ -33,11 +33,9 @@ func TestCandidateFSM(t *testing.T) {
 				PreviousLogTerm:   0,
 				Entries:           make([]types.Entry, 0),
 			})
+			assert.NoError(t, err)
 
-			cluster.Bus.Tick()
-			cluster.Network.Tick()
-
-			candidate.Tick()
+			assert.True(t, outgoingMessage.(*types.AppendEntriesOutput).Success)
 
 			assert.Equal(t, Follower, candidate.State())
 			assert.Equal(t, leader.mutableState.currentTermState.term, candidate.mutableState.currentTermState.term)
@@ -56,12 +54,13 @@ func TestCandidateFSM(t *testing.T) {
 
 			assert.NoError(t, candidateA.newTerm(withTerm(candidateB.mutableState.currentTermState.term+1)))
 
-			cluster.Bus.RequestVote(candidateA.ReplicaAddress(), candidateB.ReplicaAddress(), types.RequestVoteInput{
+			cluster.Bus.Send(candidateA.ReplicaAddress(), candidateB.ReplicaAddress(), &types.RequestVoteInput{
 				CandidateID:           candidateA.Config.ReplicaID,
 				CandidateTerm:         candidateA.mutableState.currentTermState.term,
 				CandidateLastLogIndex: 0,
 				CandidateLastLogTerm:  0,
-			})
+			},
+			)
 
 			cluster.Bus.Tick()
 			cluster.Network.Tick()
@@ -171,23 +170,17 @@ func TestCandidateFSM(t *testing.T) {
 		replicaA := cluster.Replicas[1]
 
 		// Responses from previous terms are not taken into account.
-		cluster.Bus.SendRequestVoteResponse(replicaA.ReplicaAddress(), candidate.ReplicaAddress(), types.RequestVoteOutput{
+		_, err := candidate.handleMessage(&types.RequestVoteOutput{
 			CurrentTerm: candidate.mutableState.currentTermState.term - 1,
 			VoteGranted: true,
 		})
+		assert.NoError(t, err)
 
-		cluster.Bus.Tick()
-		cluster.Network.Tick()
-		candidate.Tick()
-
-		cluster.Bus.SendRequestVoteResponse(replicaA.ReplicaAddress(), candidate.ReplicaAddress(), types.RequestVoteOutput{
+		_, err = candidate.handleMessage(&types.RequestVoteOutput{
 			CurrentTerm: candidate.mutableState.currentTermState.term - 1,
 			VoteGranted: true,
 		})
-
-		cluster.Bus.Tick()
-		cluster.Network.Tick()
-		candidate.Tick()
+		assert.NoError(t, err)
 
 		assert.Equal(t, Candidate, candidate.State())
 
@@ -195,23 +188,19 @@ func TestCandidateFSM(t *testing.T) {
 		assert.Equal(t, uint16(1), candidate.votesReceived())
 
 		// Duplicated messages are ignored.
-		cluster.Bus.SendRequestVoteResponse(replicaA.ReplicaAddress(), candidate.ReplicaAddress(), types.RequestVoteOutput{
+		_, err = candidate.handleMessage(&types.RequestVoteOutput{
+			ReplicaID:   replicaA.Config.ReplicaID,
 			CurrentTerm: candidate.mutableState.currentTermState.term,
 			VoteGranted: true,
 		})
+		assert.NoError(t, err)
 
-		cluster.Bus.Tick()
-		cluster.Network.Tick()
-		candidate.Tick()
-
-		cluster.Bus.SendRequestVoteResponse(replicaA.ReplicaAddress(), candidate.ReplicaAddress(), types.RequestVoteOutput{
+		_, err = candidate.handleMessage(&types.RequestVoteOutput{
+			ReplicaID:   replicaA.Config.ReplicaID,
 			CurrentTerm: candidate.mutableState.currentTermState.term,
 			VoteGranted: true,
 		})
-
-		cluster.Bus.Tick()
-		cluster.Network.Tick()
-		candidate.Tick()
+		assert.NoError(t, err)
 
 		// Received two votes: itself and from replica A.
 		assert.Equal(t, uint16(2), candidate.votesReceived())

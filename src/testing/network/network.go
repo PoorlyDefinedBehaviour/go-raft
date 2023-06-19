@@ -3,8 +3,8 @@ package network
 import (
 	"fmt"
 
-	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
 	"github.com/poorlydefinedbehaviour/raft-go/src/constants"
+	"github.com/poorlydefinedbehaviour/raft-go/src/mapx"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 )
@@ -30,9 +30,7 @@ type Network struct {
 	// Messages that need to be sent to a replica.
 	sendMessageQueue PriorityQueue
 
-	// List of messages that are ready to be delivered for specific replicas.
-	// Messages are delivered then Receive() is called.
-	toDeliverMessageQueue map[types.ReplicaAddress][]types.Message
+	replicasOnMessage map[types.ReplicaAddress]types.MessageFunc
 }
 
 type NetworkPath struct {
@@ -57,15 +55,12 @@ type MessageToSend struct {
 	Index                int
 }
 
-func New(config NetworkConfig, rand rand.Random, replicaAddresses []types.ReplicaAddress) *Network {
-	assert.True(len(replicaAddresses) > 0, "replica addresses cannot be empty")
+func New(config NetworkConfig, rand rand.Random) *Network {
 
 	return &Network{
-		config:                config,
-		rand:                  rand,
-		networkPaths:          buildNetworkPaths(replicaAddresses),
-		sendMessageQueue:      make(PriorityQueue, 0),
-		toDeliverMessageQueue: make(map[types.ReplicaAddress][]types.Message, 0),
+		config:           config,
+		rand:             rand,
+		sendMessageQueue: make(PriorityQueue, 0),
 	}
 }
 
@@ -85,6 +80,11 @@ func buildNetworkPaths(replicasAddresses []types.ReplicaAddress) []NetworkPath {
 	return paths
 }
 
+func (network *Network) Setup(replicasOnMessage map[types.ReplicaAddress]types.MessageFunc) {
+	network.networkPaths = buildNetworkPaths(mapx.Keys(replicasOnMessage))
+	network.replicasOnMessage = replicasOnMessage
+}
+
 func (network *Network) debug(template string, args ...interface{}) {
 	message := fmt.Sprintf(template, args...)
 
@@ -96,6 +96,19 @@ func (network *Network) debug(template string, args ...interface{}) {
 	if constants.Debug {
 		fmt.Println(message)
 	}
+}
+
+func (network *Network) MessagesFromTo(from, to types.ReplicaAddress) []types.Message {
+	messages := make([]types.Message, 0)
+
+	// Messages that may be delivered in the future.
+	for _, message := range network.sendMessageQueue {
+		if message.FromReplicaAddress == from && message.ToReplicaAddress == to {
+			messages = append(messages, message.Message)
+		}
+	}
+
+	return messages
 }
 
 func (network *Network) Send(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.Message) {
@@ -130,17 +143,7 @@ func (network *Network) randomDelay() uint64 {
 // Returns `true` when there are messages in the network that will be
 // delivered some time in the future.
 func (network *Network) HasPendingMessages() bool {
-	if len(network.sendMessageQueue) > 0 {
-		return true
-	}
-
-	for _, messages := range network.toDeliverMessageQueue {
-		if len(messages) > 0 {
-			return true
-		}
-	}
-
-	return false
+	return len(network.sendMessageQueue) > 0
 }
 
 func (network *Network) Tick() {
@@ -178,16 +181,13 @@ func (network *Network) Tick() {
 			continue
 		}
 
-		if network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] == nil {
-			network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] = make([]types.Message, 0)
-		}
-		network.debug("MARKING AS DELIVEARABLE=%+v", oldestMessage)
-		network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress] = append(network.toDeliverMessageQueue[oldestMessage.ToReplicaAddress], oldestMessage.Message)
+		network.debug("DELIVER MESSAGE=%+v", oldestMessage)
+		network.replicasOnMessage[oldestMessage.ToReplicaAddress](oldestMessage.FromReplicaAddress, oldestMessage.Message)
 
 		shouldReplay := network.rand.GenBool(network.config.MessageReplayProbability)
 		if shouldReplay {
-			network.debug("WILL REPLAY MESSAGE=%+v", oldestMessage)
-			network.sendMessageQueue.Push(oldestMessage)
+			network.debug("REPLAY MESSAGE=%+v", oldestMessage)
+			network.replicasOnMessage[oldestMessage.ToReplicaAddress](oldestMessage.FromReplicaAddress, oldestMessage.Message)
 		}
 	}
 }
@@ -200,31 +200,4 @@ func (network *Network) findPath(fromReplicaAddress, toReplicaAddress types.Repl
 	}
 
 	panic(fmt.Sprintf("unreachable: didn't find path. fromReplicaAddress=%s toReplicaAddress=%s networkPaths=%+v", fromReplicaAddress, toReplicaAddress, network.networkPaths))
-}
-
-func (network *Network) Receive(replicaAddress types.ReplicaAddress) (types.Message, error) {
-	messages := network.toDeliverMessageQueue[replicaAddress]
-	if len(messages) == 0 {
-		return nil, nil
-	}
-
-	message := messages[0]
-	network.toDeliverMessageQueue[replicaAddress] = messages[1:]
-
-	switch message.(type) {
-	case *types.UserRequestInput:
-		network.debug("RECV UserRequestInput %s", replicaAddress)
-	case *types.AppendEntriesInput:
-		network.debug("RECV AppendEntriesInput %s", replicaAddress)
-	case *types.AppendEntriesOutput:
-		network.debug("RECV AppendEntriesOutput %s", replicaAddress)
-	case *types.RequestVoteInput:
-		network.debug("RECV RequestVoteInput %s", replicaAddress)
-	case *types.RequestVoteOutput:
-		network.debug("RECV RequestVoteOutput %s", replicaAddress)
-	default:
-		panic(fmt.Sprintf("unexpected message type: %+v", message))
-	}
-
-	return message, nil
 }

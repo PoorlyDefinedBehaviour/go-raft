@@ -1,6 +1,7 @@
 package mapx
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,5 +39,26 @@ func TestMinValue(t *testing.T) {
 			assert.True(t, ok)
 			assert.Equal(t, min, actual)
 		}
+	})
+}
+
+func TestKeys(t *testing.T) {
+	t.Parallel()
+
+	rapid.Check(t, func(t *rapid.T) {
+		input := rapid.SliceOfDistinct(rapid.Int64(), func(x int64) int64 { return x }).Draw(t, "input")
+
+		m := make(map[int64]int64, len(input))
+
+		for i, value := range input {
+			m[value] = int64(i)
+		}
+
+		keys := Keys(m)
+
+		sort.Slice(input, func(i, j int) bool { return input[i] < input[j] })
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+
+		assert.Equal(t, input, keys)
 	})
 }

@@ -1,0 +1,144 @@
+# 2023/06/18 22:11:15.413896 [TestKeys] [rapid] draw input: []int64{71, -120, 459804097003864, 260367, -28596, 2, 2, -28, -3, 240200946, 6, 193124347394, 10727, -11, -129258, -2882981, 6610, -7, -21023088, 151635203, 502, -9, -56552, 95023099, -6030, -3, 9, 15329, -93847}
+# 2023/06/18 22:11:15.414238 [TestKeys] 
+# 	Error Trace:	/Users/brunofelipefrancisco/dev/go-raft/src/mapx/mapx_test.go:62
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:367
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:376
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:202
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:117
+# 	            				/Users/brunofelipefrancisco/dev/go-raft/src/mapx/mapx_test.go:48
+# 	Error:      	Not equal: 
+# 	            	expected: []int64{-21023088, -2882981, -129258, -93847, -56552, -28596, -6030, -120, -28, -11, -9, -7, -3, -3, 2, 2, 6, 9, 71, 502, 6610, 10727, 15329, 260367, 95023099, 151635203, 240200946, 193124347394, 459804097003864}
+# 	            	actual  : []int64{-21023088, -2882981, -129258, -93847, -56552, -28596, -6030, -120, -28, -11, -9, -7, -3, 2, 6, 9, 71, 502, 6610, 10727, 15329, 260367, 95023099, 151635203, 240200946, 193124347394, 459804097003864}
+# 	            	
+# 	            	Diff:
+# 	            	--- Expected
+# 	            	+++ Actual
+# 	            	@@ -1,2 +1,2 @@
+# 	            	-([]int64) (len=29) {
+# 	            	+([]int64) (len=27) {
+# 	            	  (int64) -21023088,
+# 	            	@@ -14,4 +14,2 @@
+# 	            	  (int64) -3,
+# 	            	- (int64) -3,
+# 	            	- (int64) 2,
+# 	            	  (int64) 2,
+# 	Test:       	TestKeys
+# 
+v0.4.8#16468158969661456180
+0x1b2c380bc354dc
+0x2402b308f0768
+0xac32f922f208f
+0x47
+0x68630d24a6a13
+0x19ada0a7781bb3
+0xb833a2c3935dc
+0x77
+0x14b6924350ce4c
+0x818aec3c1a32c
+0x1e87fd1aeab620
+0x1a2307bde4158
+0x19d43d3096c1a0
+0xd9664c413e938
+0x182b261a431210
+0x3f90f
+0x13ba5d8120f988
+0x14c17ae8e1d580
+0x13f7d4218f5ab8
+0x6fb3
+0x1031617f5fabd6
+0xd581f540d9c6f
+0x2a5f09d05db86
+0x2
+0x9fa7de802ae5e
+0xc17b3a23aba5f
+0x627e53a13e0a8
+0x2
+0x1a51f7fa1b7b48
+0x1bd4bbe118ee80
+0x8c642c6046e39
+0x1b
+0x1afc98371c6571
+0x12f014fef32310
+0x36c1323bc2c27
+0x2
+0x1fe8b182aa6c2d
+0x213a4429d51b3
+0x1a06dc4b771c35
+0xe512cf2
+0x69562d27b1163
+0x15eb2e1be3365
+0x625dd31fdc76b
+0x6
+0x132d6724eb94f9
+0xb81340c330b17
+0x1cd8102f01baab
+0x2cf71bae02
+0xece558b1d68b6
+0x9590003064bfb
+0x11c87461b909aa
+0x29e7
+0xf3f17d095d56e
+0x16c50b8e100205
+0x6acbbfbe4b11b
+0xa
+0x720fe63964b35
+0x18577c0c5f7809
+0x14aac865497e65
+0x1f8e9
+0x7370c8f753071
+0x11be3073f9a61f
+0x18a625df08a83c
+0x2bfda4
+0x13c22bb3d4867f
+0x3214fef57dd0a
+0x11a6f48aae7870
+0x19d2
+0x7c937a753b623
+0x1620ebe8841784
+0x6062675e9b7f5
+0x6
+0x151a13f084f580
+0x11ae38aa5aaf33
+0x19b85340bad140
+0x140c96f
+0x1b6158a3337301
+0x72c2314dbe359
+0x1ba7aa3a13841c
+0x909c503
+0x17d22a15a51a6a
+0xb9c7681df5d93
+0xc8c58ad40ad0d
+0x1f6
+0xd0fd8c6fce31b
+0x19e6c0c4dbd373
+0x59c63aada13ce
+0x8
+0xa87e6f8676084
+0x123339cc62d7f8
+0x14c9a74bfc4335
+0xdce7
+0x1ac80aa55eaf5a
+0xa6f0fdfb6d250
+0x19ce6ff2ea8bea
+0x5a9effb
+0x6130588084552
+0x13145a90426165
+0x1123dcad618dc0
+0x178d
+0xbf5ce723968c9
+0x13df08b7d4bdb4
+0x2fa1ab601edd9
+0x2
+0x1d2b50c028302e
+0x984200128665a
+0x62b29de029f2a
+0x9
+0x1bffea44431a65
+0x711d6f9905f0c
+0x123cf4ae9cdcad
+0x3be1
+0x115aaf58f92b9c
+0x16a3e969dbf74c
+0x160c7575d7a216
+0x16e96
+0x11d6109232e60
