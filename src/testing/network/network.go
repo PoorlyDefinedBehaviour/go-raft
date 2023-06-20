@@ -29,8 +29,6 @@ type Network struct {
 
 	// Messages that need to be sent to a replica.
 	sendMessageQueue PriorityQueue
-
-	replicasOnMessage map[types.ReplicaAddress]types.MessageFunc
 }
 
 type NetworkPath struct {
@@ -52,11 +50,11 @@ type MessageToSend struct {
 	FromReplicaAddress   types.ReplicaAddress
 	ToReplicaAddress     types.ReplicaAddress
 	Message              types.Message
+	Callback             types.MessageCallback
 	Index                int
 }
 
 func New(config NetworkConfig, rand rand.Random) *Network {
-
 	return &Network{
 		config:           config,
 		rand:             rand,
@@ -80,9 +78,8 @@ func buildNetworkPaths(replicasAddresses []types.ReplicaAddress) []NetworkPath {
 	return paths
 }
 
-func (network *Network) Setup(replicasOnMessage map[types.ReplicaAddress]types.MessageFunc) {
+func (network *Network) Setup(replicasOnMessage map[types.ReplicaAddress]types.MessageCallback) {
 	network.networkPaths = buildNetworkPaths(mapx.Keys(replicasOnMessage))
-	network.replicasOnMessage = replicasOnMessage
 }
 
 func (network *Network) debug(template string, args ...interface{}) {
@@ -111,7 +108,7 @@ func (network *Network) MessagesFromTo(from, to types.ReplicaAddress) []types.Me
 	return messages
 }
 
-func (network *Network) Send(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.Message) {
+func (network *Network) Send(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.Message, callback types.MessageCallback) {
 	switch message.(type) {
 	case *types.UserRequestInput:
 		network.debug("SEND UserRequestInput %s -> %s", fromReplicaAddress, toReplicaAddress)
@@ -131,6 +128,7 @@ func (network *Network) Send(fromReplicaAddress, toReplicaAddress types.ReplicaA
 		FromReplicaAddress:   fromReplicaAddress,
 		ToReplicaAddress:     toReplicaAddress,
 		Message:              message,
+		Callback:             callback,
 	}
 
 	network.sendMessageQueue.Push(messageToSend)
@@ -182,12 +180,12 @@ func (network *Network) Tick() {
 		}
 
 		network.debug("DELIVER MESSAGE=%+v", oldestMessage)
-		network.replicasOnMessage[oldestMessage.ToReplicaAddress](oldestMessage.FromReplicaAddress, oldestMessage.Message)
+		oldestMessage.Callback(oldestMessage.FromReplicaAddress, oldestMessage.Message)
 
 		shouldReplay := network.rand.GenBool(network.config.MessageReplayProbability)
 		if shouldReplay {
 			network.debug("REPLAY MESSAGE=%+v", oldestMessage)
-			network.replicasOnMessage[oldestMessage.ToReplicaAddress](oldestMessage.FromReplicaAddress, oldestMessage.Message)
+			oldestMessage.Callback(oldestMessage.FromReplicaAddress, oldestMessage.Message)
 		}
 	}
 }

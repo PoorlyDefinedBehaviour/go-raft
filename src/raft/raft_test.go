@@ -197,14 +197,14 @@ func Setup(configs ...ClusterConfig) Cluster {
 			panic(fmt.Sprintf("instantiating storage: %s", err.Error()))
 		}
 
-		raft, err := NewRaft(config, bus, storage, kv, rand, testingclock.NewClock())
+		raft, err := New(config, bus, storage, kv, rand, testingclock.NewClock())
 		if err != nil {
 			panic(err)
 		}
 		replicas = append(replicas, TestReplica{Raft: raft, Kv: kv})
 	}
 
-	replicasOnMessage := make(map[types.ReplicaAddress]types.MessageFunc)
+	replicasOnMessage := make(map[types.ReplicaAddress]types.MessageCallback)
 	for _, replica := range replicas {
 		replicasOnMessage[replica.Config.ReplicaAddress] = replica.OnMessage
 	}
@@ -232,7 +232,7 @@ func TestNewRaft(t *testing.T) {
 		storage, err := storage.NewFileStorage(replica.Storage.Directory())
 		assert.NoError(t, err)
 
-		replicaAfterRestart, err := NewRaft(replica.Config, replica.bus, storage, kv, cluster.Rand, testingclock.NewClock())
+		replicaAfterRestart, err := New(replica.Config, replica.bus, storage, kv, cluster.Rand, testingclock.NewClock())
 		assert.NoError(t, err)
 
 		assert.True(t, replicaAfterRestart.VotedForCandidateInCurrentTerm(candidate.Config.ReplicaID))

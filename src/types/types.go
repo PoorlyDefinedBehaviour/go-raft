@@ -6,7 +6,7 @@ const (
 	NewLeaderEntryType = 2
 )
 
-type MessageFunc = func(ReplicaAddress, Message)
+type MessageCallback = func(ReplicaAddress, Message)
 
 type ReplicaID = uint16
 
@@ -84,7 +84,7 @@ func (*RequestVoteOutput) Message() {
 
 type Network interface {
 	MessagesFromTo(from, to ReplicaAddress) []Message
-	Send(fromReplicaAddress, toReplicaAddress ReplicaAddress, message Message)
+	Send(fromReplicaAddress, toReplicaAddress ReplicaAddress, message Message, callback MessageCallback)
 }
 
 type StateMachine interface {

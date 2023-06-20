@@ -60,7 +60,7 @@ func (replica *TestReplica) restart(cluster *Cluster) {
 		panic(err)
 	}
 	kv := kv.NewKvStore(cluster.Bus)
-	raft, err := raft.NewRaft(raft.Config{
+	raft, err := raft.New(raft.Config{
 		ReplicaID:                replica.Config.ReplicaID,
 		ReplicaAddress:           replica.ReplicaAddress(),
 		Replicas:                 replica.Config.Replicas,
@@ -276,7 +276,7 @@ func Setup(configs ...ClusterConfig) Cluster {
 			panic(fmt.Sprintf("instantiating storage: %s", err.Error()))
 		}
 
-		raft, err := raft.NewRaft(raft.Config{
+		raft, err := raft.New(raft.Config{
 			ReplicaID:                uint16(i + 1),
 			ReplicaAddress:           replicaAddress,
 			Replicas:                 configReplicas,
@@ -290,7 +290,7 @@ func Setup(configs ...ClusterConfig) Cluster {
 		replicas = append(replicas, &TestReplica{Raft: raft, Kv: kv, isRunning: true})
 	}
 
-	replicasOnMessage := make(map[types.ReplicaAddress]types.MessageFunc)
+	replicasOnMessage := make(map[types.ReplicaAddress]types.MessageCallback)
 	for _, replica := range replicas {
 		replicasOnMessage[replica.Config.ReplicaAddress] = replica.OnMessage
 	}
