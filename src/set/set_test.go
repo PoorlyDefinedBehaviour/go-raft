@@ -72,7 +72,7 @@ func TestSetModel(t *testing.T) {
 	)
 
 	rapid.Check(t, func(t *rapid.T) {
-		ops := rapid.SliceOf(rapid.SampledFrom([]string{OpInsert, OpRemove, OpContains})).Draw(t, "ops")
+		ops := rapid.SliceOf(rapid.SampledFrom([]string{OpInsert, OpRemove, OpContains, OpSize})).Draw(t, "ops")
 
 		model := newModel[int]()
 
