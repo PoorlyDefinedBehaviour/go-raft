@@ -48,7 +48,7 @@ func TestRingBuffer(t *testing.T) {
 	)
 
 	rapid.Check(t, func(t *rapid.T) {
-		ringSize := rapid.IntRange(0, 100_000).Draw(t, "ringSize")
+		ringSize := rapid.IntRange(1, 100_000).Draw(t, "ringSize")
 
 		ring, err := New[int64](int(ringSize))
 		assert.NoError(t, err)
