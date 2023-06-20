@@ -854,6 +854,10 @@ func (raft *Raft) getNextBatchForReplica(replicaID types.ReplicaID) ([]types.Ent
 
 func (raft *Raft) sendHeartbeat() error {
 	raft.debug("heartbeat in flight")
+
+	// TODO: add request to request queue. handle acks
+	raft.requestQueue.Push(request{})
+
 	raft.inFlightRequest = newInFlightRequest(raft.Config.ReplicaID, nil)
 
 	for _, replica := range raft.Config.Replicas {

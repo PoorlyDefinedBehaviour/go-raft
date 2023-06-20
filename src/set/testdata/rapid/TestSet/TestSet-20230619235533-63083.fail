@@ -1,0 +1,63 @@
+# 2023/06/19 23:55:33.745181 [TestSet] [rapid] draw ops: []string{"insert", "insert", "remove", "contains", "remove"}
+# 2023/06/19 23:55:33.745200 [TestSet] [rapid] draw input: -1423251
+# 2023/06/19 23:55:33.745210 [TestSet] [rapid] draw input: 14
+# 2023/06/19 23:55:33.745220 [TestSet] [rapid] draw index: 1
+# 2023/06/19 23:55:33.745232 [TestSet] [rapid] draw index: 1
+# 2023/06/19 23:55:33.745312 [TestSet] 
+# 	Error Trace:	/Users/brunofelipefrancisco/dev/go-raft/src/set/set_test.go:96
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:367
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:376
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:202
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:117
+# 	            				/Users/brunofelipefrancisco/dev/go-raft/src/set/set_test.go:74
+# 	Error:      	Not equal: 
+# 	            	expected: true
+# 	            	actual  : false
+# 	Test:       	TestSet
+# 2023/06/19 23:55:33.745328 [TestSet] [rapid] draw index: 1
+# 2023/06/19 23:55:33.745404 [TestSet] 
+# 	Error Trace:	/Users/brunofelipefrancisco/dev/go-raft/src/set/set_test.go:92
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:367
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:376
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:202
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:117
+# 	            				/Users/brunofelipefrancisco/dev/go-raft/src/set/set_test.go:74
+# 	Error:      	Not equal: 
+# 	            	expected: true
+# 	            	actual  : false
+# 	Test:       	TestSet
+# 
+v0.4.8#12935971727507048536
+0x1c430280cf042e
+0xc625303743d20
+0x3
+0x3
+0x0
+0xa7c687f2e8002
+0x19f8114143735f
+0x0
+0x10dd93993ef9bd
+0xd7c95efa3a47f
+0x1
+0x132c3f4bbc8a3a
+0x7014188f7e83d
+0x2
+0x113795e566810d
+0x66bf7a3895226
+0x1
+0x2cdfb378961ee
+0x117266c57721de
+0x16bbdc30c024bd
+0x15b792
+0x9b4498d244660
+0x5ea7e9d5a609b
+0xe
+0x1b2adffdc93518
+0x1e0a2cd2f4848f
+0x1
+0x1287201bcedc8a
+0x1f12035aee9b8b
+0x1
+0x1e31952bc17374
+0x10ffe934ae4642
+0x1
