@@ -299,6 +299,11 @@ func (raft *Raft) HandleUserRequest(ctx context.Context, typ uint8, value []byte
 }
 
 func (raft *Raft) Tick() {
+	// TODO:
+	// try something like tigerbeetle does:
+	// if raft.heartbeatTimeout().fired() {
+	//   raft.onHeartbeatTimeout()
+	// }
 	raft.Clock.Tick()
 
 	switch raft.mutableState.state {
@@ -333,6 +338,14 @@ func (raft *Raft) Tick() {
 		panic(fmt.Sprintf("unexpected raft state: %d", raft.mutableState.state))
 	}
 
+}
+
+func (raft *Raft) onLeaderElectionTimeout() {
+	// raft.leaderElectionTimeout.reset()
+}
+
+func (raft *Raft) onHeartbeatTimeout() {
+	// raft.heartbeatTimeout.reset()
 }
 
 func (raft *Raft) majority() uint16 {
@@ -476,11 +489,18 @@ func (raft *Raft) transitionToState(state State) error {
 		raft.resetLeaderHeartbeatTimeout()
 
 		raft.debug("append empty entry to log after becoming leader")
-		if err := raft.Storage.AppendEntries([]types.Entry{{Term: raft.mutableState.currentTermState.term}}); err != nil {
+		nextIndex := raft.Storage.LastLogIndex() + 1
+
+		entry := types.Entry{
+			Term: raft.mutableState.currentTermState.term,
+			Type: types.NewLeaderEntryType,
+		}
+
+		if err := raft.Storage.AppendEntries([]types.Entry{entry}); err != nil {
 			return fmt.Errorf("append empty entry after becoming leader: %w", err)
 		}
-		lastLogIndex := raft.Storage.LastLogIndex()
-		raft.mutableState.nextIndex = newNextIndex(raft.Config.Replicas, lastLogIndex+1)
+
+		raft.mutableState.nextIndex = newNextIndex(raft.Config.Replicas, nextIndex)
 	case Candidate:
 	case Follower:
 		raft.debug("transitioning to follower")
@@ -796,32 +816,37 @@ func (raft *Raft) sendHeartbeat() error {
 			return fmt.Errorf("fetching batch for replica: replicaID=%d %w", replica.ReplicaID, err)
 		}
 
-		previousLogIndex := raft.mutableState.nextIndex[replica.ReplicaID]
-		if previousLogIndex > 0 {
-			previousLogIndex--
+		var previousLogIndex uint64 = 0
+		var previousLogTerm uint64 = 0
+
+		nextIndex := raft.mutableState.nextIndex[replica.ReplicaID]
+		if nextIndex > 0 {
+			previousLogIndex = nextIndex - 1
 		}
-		previousLogTerm := 0
+
 		if previousLogIndex > 0 {
-			entry, err := raft.Storage.GetEntryAtIndex(previousLogIndex)
+			previousEntry, err := raft.Storage.GetEntryAtIndex(previousLogIndex)
 			if err != nil {
-				return fmt.Errorf("getting entry at index: index=%d %w", previousLogIndex, err)
+				return fmt.Errorf("getting entry at index: index=%d :%w", previousLogIndex, err)
 			}
-			previousLogTerm = int(entry.Term)
+			previousLogTerm = previousEntry.Term
 		}
 
 		raft.debug("REPLICA=%d ENTRIES=%d PREVIOUS_LOG_INDEX=%d PREVIOUS_LOG_TERM=%d", replica.ReplicaID, len(entries), previousLogIndex, previousLogTerm)
 
-		raft.bus.Send(raft.ReplicaAddress(), replica.ReplicaAddress, &types.AppendEntriesInput{
+		input := &types.AppendEntriesInput{
 			LeaderID:          raft.Config.ReplicaID,
 			LeaderTerm:        raft.mutableState.currentTermState.term,
 			LeaderCommitIndex: raft.mutableState.commitIndex,
 			PreviousLogIndex:  previousLogIndex,
-			PreviousLogTerm:   uint64(previousLogTerm),
+			PreviousLogTerm:   previousLogTerm,
 			Entries:           entries,
-		})
+		}
+
+		raft.bus.Send(raft.ReplicaAddress(), replica.ReplicaAddress, input)
 
 		// TODO: shouldn't advance next index if request does not succeed
-		raft.mutableState.nextIndex[replica.ReplicaID] += uint64(len(entries))
+		// raft.mutableState.nextIndex[replica.ReplicaID] += uint64(len(entries))
 	}
 
 	// minIndexReplicatedInMajority, _ := mapx.MinValue(raft.mutableState.nextIndex)

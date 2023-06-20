@@ -1,7 +1,10 @@
 package types
 
 // Type used by raft empty heartbeat entries.
-const HeartbeatEntryType = 1
+const (
+	HeartbeatEntryType = 1
+	NewLeaderEntryType = 2
+)
 
 type MessageFunc = func(ReplicaAddress, Message)
 
