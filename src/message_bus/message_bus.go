@@ -10,10 +10,9 @@ import (
 )
 
 type MessageBus struct {
-	lock            *sync.Mutex
-	tick            uint64
-	network         types.Network
-	messageCallback types.MessageCallback
+	lock    *sync.Mutex
+	tick    uint64
+	network types.Network
 }
 
 func NewMessageBus(network types.Network) *MessageBus {
@@ -36,16 +35,16 @@ func (bus *MessageBus) Tick() {
 	bus.tick++
 }
 
-func (bus *MessageBus) Send(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.Message) {
-	assert.True(fromReplicaAddress != toReplicaAddress, "replica cannot send message to itself")
-	assert.True(bus.messageCallback != nil, "a message callback is required")
+func (bus *MessageBus) Send(from, to types.ReplicaID, message types.Message) {
+	assert.True(message.ID() != 0, "message id is required")
+	assert.True(from != to, "replica cannot send message to itself")
 
 	bus.lock.Lock()
 	defer bus.lock.Unlock()
 
-	bus.network.Send(fromReplicaAddress, toReplicaAddress, message, bus.messageCallback)
+	bus.network.Send(from, to, message)
 }
 
-func (bus *MessageBus) RegisterOnMessageCallback(callback types.MessageCallback) {
-	bus.messageCallback = callback
+func (bus *MessageBus) RegisterOnMessageCallback(replica types.ReplicaID, callback types.MessageCallback) {
+	bus.network.RegisterCallback(replica, callback)
 }

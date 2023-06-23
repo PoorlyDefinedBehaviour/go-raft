@@ -3,6 +3,7 @@ package network
 import (
 	"fmt"
 
+	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
 	"github.com/poorlydefinedbehaviour/raft-go/src/constants"
 	"github.com/poorlydefinedbehaviour/raft-go/src/mapx"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
@@ -24,6 +25,8 @@ type Network struct {
 
 	ticks uint64
 
+	callbacks map[types.ReplicaID]types.MessageCallback
+
 	// The network path from replica A to replica B.
 	networkPaths []NetworkPath
 
@@ -32,25 +35,24 @@ type Network struct {
 }
 
 type NetworkPath struct {
-	fromReplicaAddress     types.ReplicaAddress
-	toReplicaAddress       types.ReplicaAddress
+	from                   types.ReplicaID
+	to                     types.ReplicaID
 	makeReachableAfterTick uint64
 }
 
-func newNetworkPath(fromReplicaAddress, toReplicaAddress types.ReplicaAddress) NetworkPath {
+func newNetworkPath(from, to types.ReplicaID) NetworkPath {
 	return NetworkPath{
-		fromReplicaAddress:     fromReplicaAddress,
-		toReplicaAddress:       toReplicaAddress,
+		from:                   from,
+		to:                     to,
 		makeReachableAfterTick: 0,
 	}
 }
 
 type MessageToSend struct {
 	CanBeDeliveredAtTick uint64
-	FromReplicaAddress   types.ReplicaAddress
-	ToReplicaAddress     types.ReplicaAddress
+	From                 types.ReplicaID
+	To                   types.ReplicaID
 	Message              types.Message
-	Callback             types.MessageCallback
 	Index                int
 }
 
@@ -62,7 +64,7 @@ func New(config NetworkConfig, rand rand.Random) *Network {
 	}
 }
 
-func buildNetworkPaths(replicasAddresses []types.ReplicaAddress) []NetworkPath {
+func buildNetworkPaths(replicasAddresses []types.ReplicaID) []NetworkPath {
 	paths := make([]NetworkPath, 0)
 
 	for _, fromReplica := range replicasAddresses {
@@ -78,7 +80,7 @@ func buildNetworkPaths(replicasAddresses []types.ReplicaAddress) []NetworkPath {
 	return paths
 }
 
-func (network *Network) Setup(replicasOnMessage map[types.ReplicaAddress]types.MessageCallback) {
+func (network *Network) Setup(replicasOnMessage map[types.ReplicaID]types.MessageCallback) {
 	network.networkPaths = buildNetworkPaths(mapx.Keys(replicasOnMessage))
 }
 
@@ -95,12 +97,19 @@ func (network *Network) debug(template string, args ...interface{}) {
 	}
 }
 
-func (network *Network) MessagesFromTo(from, to types.ReplicaAddress) []types.Message {
+func (network *Network) RegisterCallback(replica types.ReplicaID, callback types.MessageCallback) {
+	if network.callbacks == nil {
+		network.callbacks = make(map[types.ReplicaID]types.MessageCallback)
+	}
+	network.callbacks[replica] = callback
+}
+
+func (network *Network) MessagesFromTo(from, to types.ReplicaID) []types.Message {
 	messages := make([]types.Message, 0)
 
 	// Messages that may be delivered in the future.
 	for _, message := range network.sendMessageQueue {
-		if message.FromReplicaAddress == from && message.ToReplicaAddress == to {
+		if message.From == from && message.To == to {
 			messages = append(messages, message.Message)
 		}
 	}
@@ -108,27 +117,28 @@ func (network *Network) MessagesFromTo(from, to types.ReplicaAddress) []types.Me
 	return messages
 }
 
-func (network *Network) Send(fromReplicaAddress, toReplicaAddress types.ReplicaAddress, message types.Message, callback types.MessageCallback) {
+func (network *Network) Send(from, to types.ReplicaID, message types.Message) {
+	assert.True(from != to, "replica cannot send message to itself")
+
 	switch message.(type) {
 	case *types.UserRequestInput:
-		network.debug("SEND UserRequestInput %s -> %s", fromReplicaAddress, toReplicaAddress)
+		network.debug("SEND UserRequestInput %d -> %d", from, to)
 	case *types.AppendEntriesInput:
-		network.debug("SEND AppendEntriesInput %s -> %s", fromReplicaAddress, toReplicaAddress)
+		network.debug("SEND AppendEntriesInput %d -> %d", from, to)
 	case *types.AppendEntriesOutput:
-		network.debug("SEND AppendEntriesOutput %s -> %s", fromReplicaAddress, toReplicaAddress)
+		network.debug("SEND AppendEntriesOutput %d -> %d", from, to)
 	case *types.RequestVoteInput:
-		network.debug("SEND RequestVoteInput %s -> %s", fromReplicaAddress, toReplicaAddress)
+		network.debug("SEND RequestVoteInput %d -> %d", from, to)
 	case *types.RequestVoteOutput:
-		network.debug("SEND RequestVoteOutput %s -> %s", fromReplicaAddress, toReplicaAddress)
+		network.debug("SEND RequestVoteOutput %d -> %d", from, to)
 	default:
 		panic(fmt.Sprintf("unexpected message type: %+v", message))
 	}
 	messageToSend := &MessageToSend{
 		CanBeDeliveredAtTick: network.randomDelay(),
-		FromReplicaAddress:   fromReplicaAddress,
-		ToReplicaAddress:     toReplicaAddress,
+		From:                 from,
+		To:                   to,
 		Message:              message,
-		Callback:             callback,
 	}
 
 	network.sendMessageQueue.Push(messageToSend)
@@ -150,10 +160,10 @@ func (network *Network) Tick() {
 	for i := range network.networkPaths {
 		shouldMakeUnreachable := network.rand.GenBool(network.config.PathClogProbability)
 		if shouldMakeUnreachable {
-			network.debug("UNREACHABLE UNTIL_TICK=%d %s -> %s",
+			network.debug("UNREACHABLE UNTIL_TICK=%d %d -> %d",
 				network.networkPaths[i].makeReachableAfterTick,
-				network.networkPaths[i].fromReplicaAddress,
-				network.networkPaths[i].toReplicaAddress,
+				network.networkPaths[i].from,
+				network.networkPaths[i].to,
 			)
 			network.networkPaths[i].makeReachableAfterTick = network.rand.GenBetween(0, network.config.MaxNetworkPathClogTicks)
 		}
@@ -167,7 +177,7 @@ func (network *Network) Tick() {
 			return
 		}
 
-		networkPath := network.findPath(oldestMessage.FromReplicaAddress, oldestMessage.ToReplicaAddress)
+		networkPath := network.findPath(oldestMessage.From, oldestMessage.To)
 		if networkPath.makeReachableAfterTick > network.ticks {
 			network.sendMessageQueue.Push(oldestMessage)
 			continue
@@ -179,23 +189,25 @@ func (network *Network) Tick() {
 			continue
 		}
 
+		callback := network.callbacks[oldestMessage.To]
+
 		network.debug("DELIVER MESSAGE=%+v", oldestMessage)
-		oldestMessage.Callback(oldestMessage.FromReplicaAddress, oldestMessage.Message)
+		callback(oldestMessage.From, oldestMessage.Message)
 
 		shouldReplay := network.rand.GenBool(network.config.MessageReplayProbability)
 		if shouldReplay {
 			network.debug("REPLAY MESSAGE=%+v", oldestMessage)
-			oldestMessage.Callback(oldestMessage.FromReplicaAddress, oldestMessage.Message)
+			network.Send(oldestMessage.From, oldestMessage.To, oldestMessage.Message)
 		}
 	}
 }
 
-func (network *Network) findPath(fromReplicaAddress, toReplicaAddress types.ReplicaAddress) NetworkPath {
+func (network *Network) findPath(from, to types.ReplicaID) NetworkPath {
 	for _, path := range network.networkPaths {
-		if path.fromReplicaAddress == fromReplicaAddress && path.toReplicaAddress == toReplicaAddress {
+		if path.from == from && path.to == to {
 			return path
 		}
 	}
 
-	panic(fmt.Sprintf("unreachable: didn't find path. fromReplicaAddress=%s toReplicaAddress=%s networkPaths=%+v", fromReplicaAddress, toReplicaAddress, network.networkPaths))
+	panic(fmt.Sprintf("unreachable: didn't find path. from=%d to=%d networkPaths=%+v", from, to, network.networkPaths))
 }

@@ -6,27 +6,29 @@ const (
 	NewLeaderEntryType = 2
 )
 
-type MessageCallback = func(ReplicaAddress, Message)
+type MessageCallback = func(ReplicaID, Message)
 
 type ReplicaID = uint16
 
 type ReplicaAddress = string
 
 type Message interface {
-	Message()
+	ID() uint64
 }
 
 type UserRequestInput struct {
-	Type   uint8
-	Value  []byte
-	DoneCh chan error
+	MessageID uint64
+	Type      uint8
+	Value     []byte
+	DoneCh    chan error
 }
 
-func (*UserRequestInput) Message() {
-	panic("unimplemented")
+func (message *UserRequestInput) ID() uint64 {
+	return message.MessageID
 }
 
 type AppendEntriesInput struct {
+	MessageID         uint64
 	LeaderID          ReplicaID
 	LeaderTerm        uint64
 	LeaderCommitIndex uint64
@@ -41,8 +43,8 @@ type Entry struct {
 	Value []byte
 }
 
-func (*AppendEntriesInput) Message() {
-	panic("unimplemented")
+func (message *AppendEntriesInput) ID() uint64 {
+	return message.MessageID
 }
 
 func (entry *Entry) IsHeartbeatEntry() bool {
@@ -50,6 +52,7 @@ func (entry *Entry) IsHeartbeatEntry() bool {
 }
 
 type AppendEntriesOutput struct {
+	MessageID        uint64
 	ReplicaID        ReplicaID
 	CurrentTerm      uint64
 	Success          bool
@@ -57,34 +60,37 @@ type AppendEntriesOutput struct {
 	PreviousLogTerm  uint64
 }
 
-func (*AppendEntriesOutput) Message() {
-	panic("unimplemented")
+func (message *AppendEntriesOutput) ID() uint64 {
+	return message.MessageID
 }
 
 type RequestVoteInput struct {
+	MessageID             uint64
 	CandidateID           ReplicaID
 	CandidateTerm         uint64
 	CandidateLastLogIndex uint64
 	CandidateLastLogTerm  uint64
 }
 
-func (*RequestVoteInput) Message() {
-	panic("unimplemented")
+func (message *RequestVoteInput) ID() uint64 {
+	return message.MessageID
 }
 
 type RequestVoteOutput struct {
+	MessageID   uint64
 	ReplicaID   ReplicaID
 	CurrentTerm uint64
 	VoteGranted bool
 }
 
-func (*RequestVoteOutput) Message() {
-	panic("unimplemented")
+func (message *RequestVoteOutput) ID() uint64 {
+	return message.MessageID
 }
 
 type Network interface {
-	MessagesFromTo(from, to ReplicaAddress) []Message
-	Send(fromReplicaAddress, toReplicaAddress ReplicaAddress, message Message, callback MessageCallback)
+	RegisterCallback(replica ReplicaID, callback MessageCallback)
+	MessagesFromTo(from, to ReplicaID) []Message
+	Send(from, to ReplicaID, message Message)
 }
 
 type StateMachine interface {

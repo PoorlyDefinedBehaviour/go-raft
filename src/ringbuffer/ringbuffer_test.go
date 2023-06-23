@@ -39,12 +39,24 @@ func (model *Model[T]) Pop() (T, bool) {
 	return value, true
 }
 
+func (model *Model[T]) Find(predicate func(*T) bool) (T, bool) {
+	for i := 0; i < len(model.items); i++ {
+		if predicate(&model.items[i]) {
+			return model.items[i], true
+		}
+	}
+
+	var zeroValue T
+	return zeroValue, false
+}
+
 func TestRingBuffer(t *testing.T) {
 	t.Parallel()
 
 	const (
 		OpPush = "push"
 		OpPop  = "pop"
+		OpFind = "find"
 	)
 
 	rapid.Check(t, func(t *rapid.T) {
@@ -55,12 +67,12 @@ func TestRingBuffer(t *testing.T) {
 
 		model := newModel[int64](ringSize)
 
-		operations := rapid.SliceOf(rapid.SampledFrom([]string{OpPush, OpPop})).Draw(t, "operations")
+		operations := rapid.SliceOf(rapid.SampledFrom([]string{OpPush, OpPop, OpFind})).Draw(t, "operations")
 
 		for _, operation := range operations {
 			switch operation {
 			case OpPush:
-				value := rapid.Int64().Draw(t, "value")
+				value := rapid.Int64().Draw(t, "valueToPush")
 				err := ring.Push(value)
 				if err != nil {
 					assert.True(t, model.isFull())
@@ -68,12 +80,22 @@ func TestRingBuffer(t *testing.T) {
 				} else {
 					model.Push(value)
 				}
+
 			case OpPop:
 				value, ok := ring.Pop()
 				modelValue, modelOk := model.Pop()
 
 				assert.Equal(t, modelOk, ok)
 				assert.Equal(t, modelValue, value)
+
+			case OpFind:
+				valueToFind := rapid.Int64().Draw(t, "valueToFind")
+
+				value, found := ring.Find(func(x *int64) bool { return *x == valueToFind })
+				modelValue, modelFound := model.Find(func(x *int64) bool { return *x == valueToFind })
+
+				assert.Equal(t, value, modelValue)
+				assert.Equal(t, found, modelFound)
 			default:
 				panic(fmt.Sprintf("unknown operation: %s", operation))
 			}

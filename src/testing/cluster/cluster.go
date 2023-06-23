@@ -166,9 +166,9 @@ func (cluster *Cluster) Tick() {
 
 	for _, replica := range cluster.Replicas {
 		if replica.isAlive(cluster.Ticks) {
-			// if !replica.isRunning {
-			// 	replica.restart(cluster)
-			// }
+			if !replica.isRunning {
+				replica.restart(cluster)
+			}
 
 			replica.Tick()
 
@@ -178,7 +178,7 @@ func (cluster *Cluster) Tick() {
 			// }
 		} else {
 			// Replica is dead, advance its clock to avoid leaving it too far behind other replicas.
-			replica.Clock.Tick()
+			// replica.Clock.Tick()
 		}
 	}
 }
@@ -256,18 +256,14 @@ func Setup(configs ...ClusterConfig) Cluster {
 
 	bus := messagebus.NewMessageBus(network)
 
+	configReplicas := make([]raft.Replica, 0, len(replicaAddresses))
+	for i := 1; i <= int(config.NumReplicas); i++ {
+		configReplicas = append(configReplicas, raft.Replica{ReplicaID: uint16(i), ReplicaAddress: fmt.Sprintf("localhost:800%d", i)})
+	}
+
 	replicas := make([]*TestReplica, 0)
 
-	for i, replicaAddress := range replicaAddresses {
-		configReplicas := make([]raft.Replica, 0)
-
-		for j, otherReplicaAddress := range replicaAddresses {
-			if replicaAddress == otherReplicaAddress {
-				continue
-			}
-			configReplicas = append(configReplicas, raft.Replica{ReplicaID: uint16(j + 1), ReplicaAddress: otherReplicaAddress})
-		}
-
+	for i, replica := range configReplicas {
 		kv := kv.NewKvStore(bus)
 
 		dir := path.Join(os.TempDir(), uuid.NewString())
@@ -278,7 +274,7 @@ func Setup(configs ...ClusterConfig) Cluster {
 
 		raft, err := raft.New(raft.Config{
 			ReplicaID:                uint16(i + 1),
-			ReplicaAddress:           replicaAddress,
+			ReplicaAddress:           replica.ReplicaAddress,
 			Replicas:                 configReplicas,
 			MaxLeaderElectionTimeout: config.Raft.MaxLeaderElectionTimeout,
 			MinLeaderElectionTimeout: config.Raft.MinLeaderElectionTimeout,

@@ -15,7 +15,6 @@ import (
 	"github.com/poorlydefinedbehaviour/raft-go/src/kv"
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
 	"github.com/stretchr/testify/assert"
-	"pgregory.net/rapid"
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
 	"github.com/poorlydefinedbehaviour/raft-go/src/storage"
@@ -168,21 +167,17 @@ func Setup(configs ...ClusterConfig) Cluster {
 	)
 	bus := messagebus.NewMessageBus(network)
 
+	configReplicas := make([]Replica, 0, len(replicaAddresses))
+	for i := 1; i <= int(config.NumReplicas); i++ {
+		configReplicas = append(configReplicas, Replica{ReplicaID: uint16(i), ReplicaAddress: fmt.Sprintf("localhost:800%d", i)})
+	}
+
 	replicas := make([]TestReplica, 0)
 
-	for i, replicaAddress := range replicaAddresses {
-		configReplicas := make([]Replica, 0)
-
-		for j, otherReplicaAddress := range replicaAddresses {
-			if replicaAddress == otherReplicaAddress {
-				continue
-			}
-			configReplicas = append(configReplicas, Replica{ReplicaID: uint16(j + 1), ReplicaAddress: otherReplicaAddress})
-		}
-
+	for i, replica := range configReplicas {
 		config := Config{
 			ReplicaID:                uint16(i + 1),
-			ReplicaAddress:           replicaAddress,
+			ReplicaAddress:           replica.ReplicaAddress,
 			Replicas:                 configReplicas,
 			MaxLeaderElectionTimeout: 300 * time.Millisecond,
 			MinLeaderElectionTimeout: 100 * time.Millisecond,
@@ -379,33 +374,6 @@ func TestVoteFor(t *testing.T) {
 
 		assert.Equal(t, uint16(1), candidate.votesReceived())
 		assert.True(t, candidate.mutableState.currentTermState.votesReceived[candidate.Config.ReplicaID])
-	})
-}
-
-func TestRemoveByReplicaID(t *testing.T) {
-	t.Parallel()
-
-	rapid.Check(t, func(t *rapid.T) {
-		replicaIDS := rapid.SliceOfDistinct(rapid.Uint16(), func(x uint16) uint16 { return x }).Draw(t, "replicaIDS")
-
-		if len(replicaIDS) == 0 {
-			return
-		}
-
-		replicas := make([]Replica, 0, len(replicaIDS))
-
-		for _, replicaID := range replicaIDS {
-			replicas = append(replicas, Replica{
-				ReplicaID:      replicaID,
-				ReplicaAddress: fmt.Sprintf("localhost:800%d", replicaID),
-			})
-		}
-
-		replicaToRemove := replicas[0]
-
-		actual := removeByReplicaID(replicas, replicaToRemove.ReplicaID)
-
-		assert.NotContains(t, actual, replicaToRemove)
 	})
 }
 

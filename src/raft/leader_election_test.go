@@ -7,21 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestLeaderElectionTimeoutFired(t *testing.T) {
-	t.Parallel()
-
-	cluster := Setup()
-
-	replica := cluster.Replicas[0]
-
-	// Tick until the timeout fires.
-	for i := 0; i < int(replica.mutableState.nextLeaderElectionTimeout); i++ {
-		replica.Tick()
-	}
-
-	assert.True(t, replica.leaderElectionTimeoutFired())
-}
-
 func TestLeaderElection(t *testing.T) {
 	t.Parallel()
 
