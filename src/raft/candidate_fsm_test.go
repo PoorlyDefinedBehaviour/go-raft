@@ -25,7 +25,7 @@ func TestCandidateFSM(t *testing.T) {
 			assert.NoError(t, leader.transitionToState(Leader))
 			assert.NoError(t, leader.newTerm(withTerm(candidate.mutableState.currentTermState.term+1)))
 
-			outgoingMessage, err := candidate.handleMessage(&types.AppendEntriesInput{
+			outgoingMessages, err := candidate.handleMessage(&types.AppendEntriesInput{
 				LeaderID:          leader.Config.ReplicaID,
 				LeaderTerm:        leader.mutableState.currentTermState.term,
 				LeaderCommitIndex: 0,
@@ -34,8 +34,9 @@ func TestCandidateFSM(t *testing.T) {
 				Entries:           make([]types.Entry, 0),
 			})
 			assert.NoError(t, err)
+			assert.Equal(t, 1, len(outgoingMessages))
 
-			assert.True(t, outgoingMessage.(*types.AppendEntriesOutput).Success)
+			assert.True(t, outgoingMessages[0].Message.(*types.AppendEntriesOutput).Success)
 
 			assert.Equal(t, Follower, candidate.State())
 			assert.Equal(t, leader.mutableState.currentTermState.term, candidate.mutableState.currentTermState.term)
@@ -54,7 +55,7 @@ func TestCandidateFSM(t *testing.T) {
 
 			assert.NoError(t, candidateA.newTerm(withTerm(candidateB.mutableState.currentTermState.term+1)))
 
-			cluster.Bus.Send(candidateA.ReplicaAddress(), candidateB.ReplicaAddress(), &types.RequestVoteInput{
+			cluster.Bus.Send(candidateA.Config.ReplicaID, candidateB.Config.ReplicaID, &types.RequestVoteInput{
 				CandidateID:           candidateA.Config.ReplicaID,
 				CandidateTerm:         candidateA.mutableState.currentTermState.term,
 				CandidateLastLogIndex: 0,
@@ -162,7 +163,9 @@ func TestCandidateFSM(t *testing.T) {
 
 		candidate := cluster.Replicas[0]
 		assert.NoError(t, candidate.transitionToState(Candidate))
-		assert.NoError(t, candidate.startElection())
+
+		_, err := candidate.startElection()
+		assert.NoError(t, err)
 
 		// Candidate's log is empty.
 		assert.Equal(t, uint64(0), candidate.Storage.LastLogIndex())
@@ -170,7 +173,7 @@ func TestCandidateFSM(t *testing.T) {
 		replicaA := cluster.Replicas[1]
 
 		// Responses from previous terms are not taken into account.
-		_, err := candidate.handleMessage(&types.RequestVoteOutput{
+		_, err = candidate.handleMessage(&types.RequestVoteOutput{
 			CurrentTerm: candidate.mutableState.currentTermState.term - 1,
 			VoteGranted: true,
 		})

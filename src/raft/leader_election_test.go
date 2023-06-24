@@ -25,8 +25,6 @@ func TestLeaderElection(t *testing.T) {
 			return replica.mutableState.nextLeaderElectionTimeout
 		})
 
-		assert.NoError(t, candidate.startElection())
-
 		actualLeader := cluster.MustWaitForLeader()
 
 		assert.Equal(t, candidate, actualLeader)

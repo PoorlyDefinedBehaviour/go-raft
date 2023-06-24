@@ -167,17 +167,16 @@ func Setup(configs ...ClusterConfig) Cluster {
 	)
 	bus := messagebus.NewMessageBus(network)
 
-	configReplicas := make([]Replica, 0, len(replicaAddresses))
+	configReplicas := make([]types.ReplicaID, 0, len(replicaAddresses))
 	for i := 1; i <= int(config.NumReplicas); i++ {
-		configReplicas = append(configReplicas, Replica{ReplicaID: uint16(i), ReplicaAddress: fmt.Sprintf("localhost:800%d", i)})
+		configReplicas = append(configReplicas, uint16(i))
 	}
 
 	replicas := make([]TestReplica, 0)
 
-	for i, replica := range configReplicas {
+	for _, replica := range configReplicas {
 		config := Config{
-			ReplicaID:                uint16(i + 1),
-			ReplicaAddress:           replica.ReplicaAddress,
+			ReplicaID:                replica,
 			Replicas:                 configReplicas,
 			MaxLeaderElectionTimeout: 300 * time.Millisecond,
 			MinLeaderElectionTimeout: 100 * time.Millisecond,
@@ -199,9 +198,9 @@ func Setup(configs ...ClusterConfig) Cluster {
 		replicas = append(replicas, TestReplica{Raft: raft, Kv: kv})
 	}
 
-	replicasOnMessage := make(map[types.ReplicaAddress]types.MessageCallback)
+	replicasOnMessage := make(map[types.ReplicaID]types.MessageCallback)
 	for _, replica := range replicas {
-		replicasOnMessage[replica.Config.ReplicaAddress] = replica.OnMessage
+		replicasOnMessage[replica.Config.ReplicaID] = replica.OnMessage
 	}
 	network.Setup(replicasOnMessage)
 
@@ -402,18 +401,22 @@ func TestHandleMessageAppendEntriesInput(t *testing.T) {
 			Entries:           make([]types.Entry, 0),
 		}
 
-		outgoingMessage, err := replica.handleMessage(&inputMessage)
+		outgoingMessages, err := replica.handleMessage(&inputMessage)
 		assert.NoError(t, err)
 
-		expected := &types.AppendEntriesOutput{
-			ReplicaID:        replica.Config.ReplicaID,
-			CurrentTerm:      term,
-			Success:          false,
-			PreviousLogIndex: 0,
-			PreviousLogTerm:  0,
+		expected := []OutgoingMessage{{
+			To: leader.Config.ReplicaID,
+			Message: &types.AppendEntriesOutput{
+				ReplicaID:        replica.Config.ReplicaID,
+				CurrentTerm:      term,
+				Success:          false,
+				PreviousLogIndex: 0,
+				PreviousLogTerm:  0,
+			},
+		},
 		}
 
-		assert.Equal(t, expected, outgoingMessage)
+		assert.Equal(t, expected, outgoingMessages)
 	})
 
 	t.Run("leader message previous log index is not the same as the replicas last log index, success=false", func(t *testing.T) {
@@ -433,18 +436,21 @@ func TestHandleMessageAppendEntriesInput(t *testing.T) {
 			Entries:           make([]types.Entry, 0),
 		}
 
-		outgoingMessage, err := replica.handleMessage(&appendEntriesInput)
+		outgoingMessages, err := replica.handleMessage(&appendEntriesInput)
 		assert.NoError(t, err)
 
-		expected := &types.AppendEntriesOutput{
-			ReplicaID:        replica.Config.ReplicaID,
-			CurrentTerm:      leader.Term(),
-			Success:          false,
-			PreviousLogIndex: 0,
-			PreviousLogTerm:  0,
+		expected := OutgoingMessage{
+			To: leader.Config.ReplicaID,
+			Message: &types.AppendEntriesOutput{
+				ReplicaID:        replica.Config.ReplicaID,
+				CurrentTerm:      leader.Term(),
+				Success:          false,
+				PreviousLogIndex: 0,
+				PreviousLogTerm:  0,
+			},
 		}
 
-		assert.Equal(t, expected, outgoingMessage)
+		assert.Equal(t, expected, outgoingMessages)
 	})
 
 	t.Run("replica has entry with a different term at index, should truncate replica's log", func(t *testing.T) {
@@ -474,18 +480,21 @@ func TestHandleMessageAppendEntriesInput(t *testing.T) {
 			},
 		}
 
-		outgoingMessage, err := replica.handleMessage(&inputMessage)
+		outgoingMessages, err := replica.handleMessage(&inputMessage)
 		assert.NoError(t, err)
 
-		expected := &types.AppendEntriesOutput{
-			ReplicaID:        replica.Config.ReplicaID,
-			CurrentTerm:      leader.Term(),
-			Success:          true,
-			PreviousLogIndex: 0,
-			PreviousLogTerm:  0,
+		expected := OutgoingMessage{
+			To: leader.Config.ReplicaID,
+			Message: &types.AppendEntriesOutput{
+				ReplicaID:        replica.Config.ReplicaID,
+				CurrentTerm:      leader.Term(),
+				Success:          true,
+				PreviousLogIndex: 0,
+				PreviousLogTerm:  0,
+			},
 		}
 
-		assert.Equal(t, expected, outgoingMessage)
+		assert.Equal(t, expected, outgoingMessages)
 
 		entry, err := replica.Storage.GetEntryAtIndex(1)
 		assert.NoError(t, err)
@@ -533,7 +542,7 @@ func TestHandleMessageAppendEntriesInput(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		outgoingMessage, err := replica.handleMessage(&types.AppendEntriesInput{
+		outgoingMessages, err := replica.handleMessage(&types.AppendEntriesInput{
 			LeaderID:          leader.Config.ReplicaID,
 			LeaderTerm:        leader.mutableState.currentTermState.term,
 			LeaderCommitIndex: leader.mutableState.commitIndex,
@@ -549,7 +558,7 @@ func TestHandleMessageAppendEntriesInput(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		response := outgoingMessage.(*types.AppendEntriesOutput)
+		response := outgoingMessages[0].Message.(*types.AppendEntriesOutput)
 		assert.True(t, response.Success)
 
 		// First entry has been applied.
@@ -624,7 +633,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 
 		assert.NoError(t, replica.newTerm(withTerm(1)))
 
-		outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+		outgoingMessages, err := replica.handleMessage(&types.RequestVoteInput{
 			CandidateID:           candidate.Config.ReplicaID,
 			CandidateTerm:         0,
 			CandidateLastLogIndex: 0,
@@ -632,7 +641,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		response := outgoingMessage.(*types.RequestVoteOutput)
+		response := outgoingMessages[0].Message.(*types.RequestVoteOutput)
 		assert.False(t, response.VoteGranted)
 		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
 	})
@@ -647,7 +656,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 
 		assert.NoError(t, replica.Storage.AppendEntries([]types.Entry{{Term: 0}}))
 
-		outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+		outgoingMessages, err := replica.handleMessage(&types.RequestVoteInput{
 			CandidateID:           candidate.Config.ReplicaID,
 			CandidateTerm:         0,
 			CandidateLastLogIndex: 0,
@@ -655,7 +664,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		response := outgoingMessage.(*types.RequestVoteOutput)
+		response := outgoingMessages[0].Message.(*types.RequestVoteOutput)
 		assert.False(t, response.VoteGranted)
 		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
 	})
@@ -670,7 +679,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 
 		assert.NoError(t, replica.Storage.AppendEntries([]types.Entry{{Term: 1}}))
 
-		outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+		outgoingMessages, err := replica.handleMessage(&types.RequestVoteInput{
 			CandidateID:           candidate.Config.ReplicaID,
 			CandidateTerm:         1,
 			CandidateLastLogIndex: 1,
@@ -678,7 +687,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		response := outgoingMessage.(*types.RequestVoteOutput)
+		response := outgoingMessages[0].Message.(*types.RequestVoteOutput)
 		assert.False(t, response.VoteGranted)
 		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
 	})
@@ -691,7 +700,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 		candidate := env.Replicas[0]
 		replica := env.Replicas[1]
 
-		outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+		outgoingMessages, err := replica.handleMessage(&types.RequestVoteInput{
 			CandidateID:           candidate.Config.ReplicaID,
 			CandidateTerm:         0,
 			CandidateLastLogIndex: 0,
@@ -699,7 +708,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		response := outgoingMessage.(*types.RequestVoteOutput)
+		response := outgoingMessages[0].Message.(*types.RequestVoteOutput)
 		assert.True(t, response.VoteGranted)
 		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
 	})
@@ -713,7 +722,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 		replica := env.Replicas[1]
 
 		for i := 0; i < 2; i++ {
-			outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+			outgoingMessages, err := replica.handleMessage(&types.RequestVoteInput{
 				CandidateID:           candidate.Config.ReplicaID,
 				CandidateTerm:         0,
 				CandidateLastLogIndex: 0,
@@ -721,7 +730,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 			})
 			assert.NoError(t, err)
 
-			response := outgoingMessage.(*types.RequestVoteOutput)
+			response := outgoingMessages[0].Message.(*types.RequestVoteOutput)
 			assert.True(t, response.VoteGranted)
 			assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
 		}
@@ -737,7 +746,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 		replica := env.Replicas[2]
 
 		// Request vote for candidate A.
-		outgoingMessage, err := replica.handleMessage(&types.RequestVoteInput{
+		outgoingMessages, err := replica.handleMessage(&types.RequestVoteInput{
 			CandidateID:           candidateA.Config.ReplicaID,
 			CandidateTerm:         0,
 			CandidateLastLogIndex: 0,
@@ -745,12 +754,12 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		response := outgoingMessage.(*types.RequestVoteOutput)
+		response := outgoingMessages[0].Message.(*types.RequestVoteOutput)
 		assert.True(t, response.VoteGranted)
 		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
 
 		// Request vote for candidate B
-		outgoingMessage, err = replica.handleMessage(&types.RequestVoteInput{
+		outgoingMessages, err = replica.handleMessage(&types.RequestVoteInput{
 			CandidateID:           candidateB.Config.ReplicaID,
 			CandidateTerm:         0,
 			CandidateLastLogIndex: 0,
@@ -758,7 +767,7 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		response = outgoingMessage.(*types.RequestVoteOutput)
+		response = outgoingMessages[0].Message.(*types.RequestVoteOutput)
 		assert.False(t, response.VoteGranted)
 		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
 	})

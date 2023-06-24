@@ -113,9 +113,6 @@ type Config struct {
 	// The ID of this replica.
 	ReplicaID types.ReplicaID
 
-	// The address of this replica.
-	ReplicaAddress types.ReplicaAddress
-
 	// Minimum amount of time to wait for without receiving a heartbeat from the leader to start an election.
 	MinLeaderElectionTimeout time.Duration
 
@@ -125,12 +122,8 @@ type Config struct {
 	// As a leader, how long to wait for before sending a heartbeat to replicas.
 	LeaderHeartbeatTimeout time.Duration
 
-	// The list of other replicas in the cluster. Should not include this replica.
-	Replicas []Replica
-}
-
-type Replica struct {
-	ReplicaID types.ReplicaID
+	// The list of other replicas in the cluster. Includes this replica.
+	Replicas []types.ReplicaID
 }
 
 type OutgoingMessage struct {
@@ -148,9 +141,6 @@ func New(
 ) (*Raft, error) {
 	if config.ReplicaID == 0 {
 		return nil, fmt.Errorf("replica id cannot be 0")
-	}
-	if config.ReplicaAddress == "" {
-		return nil, fmt.Errorf("replica address is required")
 	}
 	if config.MinLeaderElectionTimeout == 0 {
 		return nil, fmt.Errorf("minimum leader election timeout is required")
@@ -216,11 +206,11 @@ func New(
 	return raft, nil
 }
 
-func newNextIndex(replicas []Replica, nextIndex uint64) map[types.ReplicaID]uint64 {
+func newNextIndex(replicas []types.ReplicaID, nextIndex uint64) map[types.ReplicaID]uint64 {
 	out := make(map[types.ReplicaID]uint64)
 
 	for _, replica := range replicas {
-		out[replica.ReplicaID] = nextIndex
+		out[replica] = nextIndex
 	}
 
 	return out
@@ -242,7 +232,7 @@ func stateLetter(state State) string {
 func (raft *Raft) debug(template string, args ...interface{}) {
 	message := fmt.Sprintf(template, args...)
 
-	message = fmt.Sprintf("%s(%s) T=%d TICK=%d %s\n",
+	message = fmt.Sprintf("%s(%d) T=%d TICK=%d %s\n",
 		stateLetter(raft.State()),
 		raft.Config.ReplicaID,
 		raft.mutableState.currentTermState.term,
@@ -258,7 +248,7 @@ func (raft *Raft) debug(template string, args ...interface{}) {
 func (raft *Raft) error(template string, args ...interface{}) {
 	message := fmt.Sprintf(template, args...)
 
-	message = fmt.Sprintf("%s(%s) T=%d %s\n",
+	message = fmt.Sprintf("%s(%d) T=%d %s\n",
 		stateLetter(raft.State()),
 		raft.Config.ReplicaID,
 		raft.mutableState.currentTermState.term,
@@ -416,14 +406,14 @@ func (raft *Raft) startElection() ([]OutgoingMessage, error) {
 	messages := make([]OutgoingMessage, 0, len(raft.Config.Replicas)-1)
 
 	for _, replica := range raft.Config.Replicas {
-		if replica.ReplicaID == raft.Config.ReplicaID {
+		if replica == raft.Config.ReplicaID {
 			continue
 		}
 
-		raft.debug("REQUEST VOTE REPLICA=%d", replica.ReplicaID)
+		raft.debug("REQUEST VOTE REPLICA=%d", replica)
 
 		messages = append(messages, OutgoingMessage{
-			To: replica.ReplicaID,
+			To: replica,
 			Message: &types.RequestVoteInput{
 				MessageID:             request.requestID,
 				CandidateTerm:         raft.mutableState.currentTermState.term,
@@ -908,19 +898,19 @@ func (raft *Raft) sendHeartbeat() ([]OutgoingMessage, error) {
 	messages := make([]OutgoingMessage, 0, len(raft.Config.Replicas)-1)
 
 	for _, replica := range raft.Config.Replicas {
-		if replica.ReplicaID == raft.Config.ReplicaID {
+		if replica == raft.Config.ReplicaID {
 			continue
 		}
 
-		entries, err := raft.getNextBatchForReplica(replica.ReplicaID)
+		entries, err := raft.getNextBatchForReplica(replica)
 		if err != nil {
-			return nil, fmt.Errorf("fetching batch for replica: replicaID=%d %w", replica.ReplicaID, err)
+			return nil, fmt.Errorf("fetching batch for replica: replicaID=%d %w", replica, err)
 		}
 
 		var previousLogIndex uint64 = 0
 		var previousLogTerm uint64 = 0
 
-		nextIndex := raft.mutableState.nextIndex[replica.ReplicaID]
+		nextIndex := raft.mutableState.nextIndex[replica]
 		if nextIndex > 0 {
 			previousLogIndex = nextIndex - 1
 		}
@@ -933,10 +923,10 @@ func (raft *Raft) sendHeartbeat() ([]OutgoingMessage, error) {
 			previousLogTerm = previousEntry.Term
 		}
 
-		raft.debug("REPLICA=%d ENTRIES=%d PREVIOUS_LOG_INDEX=%d PREVIOUS_LOG_TERM=%d", replica.ReplicaID, len(entries), previousLogIndex, previousLogTerm)
+		raft.debug("REPLICA=%d ENTRIES=%d PREVIOUS_LOG_INDEX=%d PREVIOUS_LOG_TERM=%d", replica, len(entries), previousLogIndex, previousLogTerm)
 
 		messages = append(messages, OutgoingMessage{
-			To: replica.ReplicaID,
+			To: replica,
 			Message: &types.AppendEntriesInput{
 				MessageID:         request.requestID,
 				LeaderID:          raft.Config.ReplicaID,
@@ -951,7 +941,7 @@ func (raft *Raft) sendHeartbeat() ([]OutgoingMessage, error) {
 		// raft.bus.Send(raft.Config.ReplicaID, replica.ReplicaAddress, input)
 
 		// TODO: shouldn't advance next index if request does not succeed
-		// raft.mutableState.nextIndex[replica.ReplicaID] += uint64(len(entries))
+		// raft.mutableState.nextIndex[replica] += uint64(len(entries))
 	}
 
 	// minIndexReplicatedInMajority, _ := mapx.MinValue(raft.mutableState.nextIndex)
@@ -1020,13 +1010,4 @@ func (raft *Raft) applyCommittedEntries(leaderCommitIndex uint64, lastlogIndex u
 	raft.mutableState.commitIndex = commitIndex
 
 	return nil
-}
-
-func findReplicaByID(replicas []Replica, replicaID types.ReplicaID) Replica {
-	for _, replica := range replicas {
-		if replica.ReplicaID == replicaID {
-			return replica
-		}
-	}
-	panic(fmt.Sprintf("unreachable: unable to find replica with id. id=%d replicas=%+v", replicaID, replicas))
 }

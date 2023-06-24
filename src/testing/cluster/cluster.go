@@ -62,7 +62,6 @@ func (replica *TestReplica) restart(cluster *Cluster) {
 	kv := kv.NewKvStore(cluster.Bus)
 	raft, err := raft.New(raft.Config{
 		ReplicaID:                replica.Config.ReplicaID,
-		ReplicaAddress:           replica.ReplicaAddress(),
 		Replicas:                 replica.Config.Replicas,
 		MaxLeaderElectionTimeout: replica.Config.MaxLeaderElectionTimeout,
 		MinLeaderElectionTimeout: replica.Config.MinLeaderElectionTimeout,
@@ -256,14 +255,14 @@ func Setup(configs ...ClusterConfig) Cluster {
 
 	bus := messagebus.NewMessageBus(network)
 
-	configReplicas := make([]raft.Replica, 0, len(replicaAddresses))
+	configReplicas := make([]types.ReplicaID, 0, len(replicaAddresses))
 	for i := 1; i <= int(config.NumReplicas); i++ {
-		configReplicas = append(configReplicas, raft.Replica{ReplicaID: uint16(i), ReplicaAddress: fmt.Sprintf("localhost:800%d", i)})
+		configReplicas = append(configReplicas, uint16(i))
 	}
 
 	replicas := make([]*TestReplica, 0)
 
-	for i, replica := range configReplicas {
+	for _, replica := range configReplicas {
 		kv := kv.NewKvStore(bus)
 
 		dir := path.Join(os.TempDir(), uuid.NewString())
@@ -273,8 +272,7 @@ func Setup(configs ...ClusterConfig) Cluster {
 		}
 
 		raft, err := raft.New(raft.Config{
-			ReplicaID:                uint16(i + 1),
-			ReplicaAddress:           replica.ReplicaAddress,
+			ReplicaID:                replica,
 			Replicas:                 configReplicas,
 			MaxLeaderElectionTimeout: config.Raft.MaxLeaderElectionTimeout,
 			MinLeaderElectionTimeout: config.Raft.MinLeaderElectionTimeout,
@@ -286,9 +284,9 @@ func Setup(configs ...ClusterConfig) Cluster {
 		replicas = append(replicas, &TestReplica{Raft: raft, Kv: kv, isRunning: true})
 	}
 
-	replicasOnMessage := make(map[types.ReplicaAddress]types.MessageCallback)
+	replicasOnMessage := make(map[types.ReplicaID]types.MessageCallback)
 	for _, replica := range replicas {
-		replicasOnMessage[replica.Config.ReplicaAddress] = replica.OnMessage
+		replicasOnMessage[replica.Config.ReplicaID] = replica.OnMessage
 	}
 	network.Setup(replicasOnMessage)
 
