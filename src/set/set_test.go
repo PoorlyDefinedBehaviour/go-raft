@@ -52,7 +52,30 @@ func (model *Model[T]) Contains(value T) bool {
 	return false
 }
 
-func randomMember[T comparable](t *rapid.T, model *Model[T]) T {
+func (model *Model[T]) Find(predicate func(*T) bool) (T, bool) {
+	for _, item := range model.items {
+		if predicate(&item) {
+			return item, true
+		}
+	}
+
+	var zeroValue T
+	return zeroValue, false
+}
+
+func (model *Model[T]) Retain(predicate func(*T) bool) {
+	items := make([]T, 0)
+
+	for _, item := range model.items {
+		if predicate(&item) {
+			items = append(items, item)
+		}
+	}
+
+	model.items = items
+}
+
+func maybeExistingMember[T comparable](t *rapid.T, model *Model[T]) T {
 	var member T
 	if model.Size() == 0 {
 		return member
@@ -68,11 +91,13 @@ func TestSetModel(t *testing.T) {
 		OpInsert   = "insert"
 		OpRemove   = "remove"
 		OpContains = "contains"
+		OpFind     = "find"
+		OpRetain   = "retain"
 		OpSize     = "size"
 	)
 
 	rapid.Check(t, func(t *rapid.T) {
-		ops := rapid.SliceOf(rapid.SampledFrom([]string{OpInsert, OpRemove, OpContains, OpSize})).Draw(t, "ops")
+		ops := rapid.SliceOf(rapid.SampledFrom([]string{OpInsert, OpRemove, OpContains, OpFind, OpRetain, OpSize})).Draw(t, "ops")
 
 		model := newModel[int]()
 
@@ -86,15 +111,30 @@ func TestSetModel(t *testing.T) {
 				model.Insert(value)
 
 			case OpRemove:
-				value := randomMember(t, &model)
+				value := maybeExistingMember(t, &model)
 
 				removedFromSet := set.Remove(value)
 				removedFromModel := model.Remove(value)
 				assert.Equal(t, removedFromModel, removedFromSet)
 
 			case OpContains:
-				value := randomMember(t, &model)
+				value := maybeExistingMember(t, &model)
 				assert.Equal(t, model.Contains(value), set.Contains(value))
+
+			case OpFind:
+				value := maybeExistingMember(t, &model)
+
+				modelValue, modelFound := model.Find(func(x *int) bool { return *x == value })
+				setValue, setFound := set.Find(func(x *int) bool { return *x == value })
+
+				assert.Equal(t, modelValue, setValue)
+				assert.Equal(t, modelFound, setFound)
+
+			case OpRetain:
+				value := maybeExistingMember(t, &model)
+
+				model.Retain(func(x *int) bool { return *x <= value })
+				set.Retain(func(x *int) bool { return *x <= value })
 
 			case OpSize:
 				assert.Equal(t, model.Size(), set.Size())

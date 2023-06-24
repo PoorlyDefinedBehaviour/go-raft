@@ -25,6 +25,25 @@ func (set *T[Type]) Contains(value Type) bool {
 	return ok
 }
 
+func (set *T[Type]) Find(predicate func(*Type) bool) (Type, bool) {
+	for member := range set.members {
+		if predicate(&member) {
+			return member, true
+		}
+	}
+
+	var zeroValue Type
+	return zeroValue, false
+}
+
+func (set *T[Type]) Retain(predicate func(*Type) bool) {
+	for member := range set.members {
+		if !predicate(&member) {
+			delete(set.members, member)
+		}
+	}
+}
+
 func (set *T[Type]) Size() int {
 	return len(set.members)
 }

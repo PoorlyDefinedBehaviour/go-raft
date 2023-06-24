@@ -1,5 +1,7 @@
 package constants
 
+import "os"
+
 var (
-	Debug = true //os.Getenv("DEBUG") != ""
+	Debug = os.Getenv("DEBUG") != ""
 )

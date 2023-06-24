@@ -116,6 +116,7 @@ type RaftConfig struct {
 	MaxLeaderElectionTimeout time.Duration
 	MinLeaderElectionTimeout time.Duration
 	LeaderHeartbeatTimeout   time.Duration
+	MaxInFlightRequests      uint16
 }
 
 func defaultConfig() ClusterConfig {
@@ -140,6 +141,7 @@ func defaultConfig() ClusterConfig {
 			MaxLeaderElectionTimeout: 300 * time.Millisecond,
 			MinLeaderElectionTimeout: 100 * time.Millisecond,
 			LeaderHeartbeatTimeout:   100 * time.Millisecond,
+			MaxInFlightRequests:      20,
 		},
 	}
 }
@@ -181,6 +183,7 @@ func Setup(configs ...ClusterConfig) Cluster {
 			MaxLeaderElectionTimeout: 300 * time.Millisecond,
 			MinLeaderElectionTimeout: 100 * time.Millisecond,
 			LeaderHeartbeatTimeout:   100 * time.Millisecond,
+			MaxInFlightRequests:      config.Raft.MaxInFlightRequests,
 		}
 
 		kv := kv.NewKvStore(bus)

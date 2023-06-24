@@ -44,6 +44,7 @@ type TestReplica struct {
 }
 
 func (replica *TestReplica) crash(cluster *Cluster) {
+	fmt.Println("replica.crash()")
 	crashUntilTick := cluster.replicaCrashedUntilTick()
 
 	cluster.debug("CRASH UNTIL_TICK=%d REPLICA=%d", crashUntilTick, replica.Config.ReplicaID)
@@ -53,6 +54,7 @@ func (replica *TestReplica) crash(cluster *Cluster) {
 }
 
 func (replica *TestReplica) restart(cluster *Cluster) {
+	fmt.Println("replica.restart()")
 	cluster.debug("RESTART REPLICA=%d", replica.Config.ReplicaID)
 
 	storage, err := storage.NewFileStorage(replica.Storage.Directory())
@@ -124,6 +126,7 @@ func (cluster *Cluster) MustWaitForLeader() *TestReplica {
 }
 
 func (cluster *Cluster) mustWaitForReplicaWithStatus(state raft.State) *TestReplica {
+	fmt.Println("cluster.mustWaitForReplicaWithStatus()")
 	const maxTicks = 10_000
 
 	for i := 0; i < maxTicks; i++ {
@@ -139,21 +142,15 @@ func (cluster *Cluster) mustWaitForReplicaWithStatus(state raft.State) *TestRepl
 	panic("unable to elect a leader in time")
 }
 
-func (cluster *Cluster) Start() {
-
-	for {
-		cluster.Tick()
-		time.Sleep(1 * time.Millisecond)
-	}
-}
-
 func (cluster *Cluster) TickUntilEveryMessageIsDelivered() {
+	fmt.Println("cluster.TickUntilEveryMessageIsDelivered()")
 	for cluster.Network.HasPendingMessages() {
 		cluster.Tick()
 	}
 }
 
 func (cluster *Cluster) Tick() {
+	fmt.Printf("TICK=%d cluster.Tick()\n", cluster.Ticks)
 	cluster.Ticks++
 
 	cluster.Bus.Tick()
@@ -183,6 +180,7 @@ func (cluster *Cluster) Tick() {
 }
 
 func (cluster *Cluster) Leader() *TestReplica {
+	fmt.Println("cluster.Leader()")
 	for _, replica := range cluster.Replicas {
 		if replica.Raft.State() == raft.Leader {
 			return replica
@@ -277,6 +275,7 @@ func Setup(configs ...ClusterConfig) Cluster {
 			MaxLeaderElectionTimeout: config.Raft.MaxLeaderElectionTimeout,
 			MinLeaderElectionTimeout: config.Raft.MinLeaderElectionTimeout,
 			LeaderHeartbeatTimeout:   config.Raft.LeaderHeartbeatTimeout,
+			MaxInFlightRequests:      20,
 		}, bus, storage, kv, rand, testingclock.NewClock())
 		if err != nil {
 			panic(err)

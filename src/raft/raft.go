@@ -10,7 +10,6 @@ import (
 	"github.com/poorlydefinedbehaviour/raft-go/src/constants"
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
-	"github.com/poorlydefinedbehaviour/raft-go/src/ringbuffer"
 	"github.com/poorlydefinedbehaviour/raft-go/src/set"
 	"github.com/poorlydefinedbehaviour/raft-go/src/storage"
 	"github.com/poorlydefinedbehaviour/raft-go/src/timeout"
@@ -67,16 +66,17 @@ type Raft struct {
 
 	leaderElectionTimeout timeout.T
 
-	requestQueue *ringbuffer.RingBuffer[*request]
+	requests *set.T[*request]
 
 	nextRequestID uint64
 }
 
 type request struct {
-	requestID uint64
-	successes *set.T[types.ReplicaID]
-	failures  *set.T[types.ReplicaID]
-	doneCh    chan error
+	requestID     uint64
+	successes     *set.T[types.ReplicaID]
+	failures      *set.T[types.ReplicaID]
+	timeoutAtTick uint64
+	// doneCh        chan error
 }
 
 type MutableState struct {
@@ -124,6 +124,8 @@ type Config struct {
 
 	// The list of other replicas in the cluster. Includes this replica.
 	Replicas []types.ReplicaID
+
+	MaxInFlightRequests uint16
 }
 
 type OutgoingMessage struct {
@@ -154,10 +156,8 @@ func New(
 	if config.LeaderHeartbeatTimeout == 0 {
 		return nil, fmt.Errorf("leader heartbeat timeout is required")
 	}
-
-	requestQueue, err := ringbuffer.New[*request](20)
-	if err != nil {
-		return nil, fmt.Errorf("instantiating request queue: %w", err)
+	if config.MaxInFlightRequests == 0 {
+		return nil, fmt.Errorf("max in flight requests must be greater than 0")
 	}
 
 	raft := &Raft{
@@ -182,7 +182,7 @@ func New(
 			uint64(config.MinLeaderElectionTimeout.Milliseconds()),
 			uint64(config.MaxLeaderElectionTimeout.Milliseconds()),
 		)),
-		requestQueue:  requestQueue,
+		requests:      set.New[*request](),
 		nextRequestID: 1,
 		Clock:         clock,
 	}
@@ -201,7 +201,10 @@ func New(
 	if err := raft.transitionToState(Follower); err != nil {
 		return raft, fmt.Errorf("transitioning to follower: %w", err)
 	}
-	raft.resetElectionTimeout()
+	raft.leaderElectionTimeout.ResetAndFireAfter(raft.rand.GenBetween(
+		uint64(raft.Config.MinLeaderElectionTimeout.Milliseconds()),
+		uint64(raft.Config.MaxLeaderElectionTimeout.Milliseconds()),
+	))
 
 	return raft, nil
 }
@@ -259,6 +262,7 @@ func (raft *Raft) error(template string, args ...interface{}) {
 }
 
 func (raft *Raft) newRequestID() uint64 {
+	fmt.Println("newRequestID()")
 	requestID := raft.nextRequestID
 
 	raft.nextRequestID++
@@ -267,25 +271,32 @@ func (raft *Raft) newRequestID() uint64 {
 }
 
 func (raft *Raft) Start() {
+	raft.debug("Start()")
 	for {
 		raft.Tick()
 		time.Sleep(1 * time.Millisecond)
 	}
 }
 
-func newInFlightRequest(requestID uint64, doneCh chan error) *request {
+func newInFlightRequest(requestID uint64, doneCh chan error, timeout uint64) *request {
 	return &request{
-		requestID: requestID,
-		successes: set.New[types.ReplicaID](),
-		failures:  set.New[types.ReplicaID](),
-		doneCh:    doneCh,
+		requestID:     requestID,
+		timeoutAtTick: timeout,
+		successes:     set.New[types.ReplicaID](),
+		failures:      set.New[types.ReplicaID](),
+		// doneCh:        doneCh,
 	}
 }
 
 func (raft *Raft) Tick() {
+	fmt.Printf("REPLICA=%d raft.Tick()\n", raft.Config.ReplicaID)
 	raft.Clock.Tick()
 	raft.heartbeatTimeout.Tick()
 	raft.leaderElectionTimeout.Tick()
+
+	raft.requests.Retain(func(request **request) bool {
+		return (*request).timeoutAtTick > raft.Clock.CurrentTick()
+	})
 
 	if raft.heartbeatTimeout.Fired() {
 		outgoingMessages, err := raft.onHeartbeatTimeout()
@@ -310,6 +321,7 @@ func (raft *Raft) Tick() {
 }
 
 func (raft *Raft) onHeartbeatTimeout() ([]OutgoingMessage, error) {
+	raft.debug("onHeartbeatTimeout()")
 	raft.heartbeatTimeout.Reset()
 
 	if raft.State() != Leader {
@@ -326,6 +338,7 @@ func (raft *Raft) onHeartbeatTimeout() ([]OutgoingMessage, error) {
 }
 
 func (raft *Raft) onLeaderElectionTimeout() ([]OutgoingMessage, error) {
+	fmt.Println("onLeaderElectionTimeout()")
 	raft.leaderElectionTimeout.ResetAndFireAfter(raft.rand.GenBetween(
 		uint64(raft.Config.MinLeaderElectionTimeout.Milliseconds()),
 		uint64(raft.Config.MaxLeaderElectionTimeout.Milliseconds()),
@@ -343,6 +356,7 @@ func (raft *Raft) onLeaderElectionTimeout() ([]OutgoingMessage, error) {
 		if err != nil {
 			return outgoingMessages, fmt.Errorf("starting election: %w", err)
 		}
+		return outgoingMessages, nil
 	case Leader:
 		return nil, nil
 	default:
@@ -360,37 +374,16 @@ func (raft *Raft) VotedForCandidateInCurrentTerm(candidateID uint16) bool {
 	return raft.mutableState.currentTermState.votedFor == candidateID
 }
 
-func (raft *Raft) resetElectionTimeout() {
-	nextTimeoutAtTick := raft.mutableState.nextLeaderElectionTimeout +
-		raft.rand.GenBetween(
-			uint64(raft.Config.MinLeaderElectionTimeout.Milliseconds()),
-			uint64(raft.Config.MaxLeaderElectionTimeout.Milliseconds()),
-		)
-
-	raft.debug("tick=%d nextTimeoutAtTick=%d new leader election timeout",
-		raft.Clock.CurrentTick(),
-		nextTimeoutAtTick,
-	)
-
-	raft.mutableState.nextLeaderElectionTimeout = nextTimeoutAtTick
-}
-
-func (raft *Raft) resetLeaderHeartbeatTimeout() {
-	nextTimeoutAtTick := raft.mutableState.nextLeaderHeartbeatTimeout + uint64(raft.Config.LeaderHeartbeatTimeout.Milliseconds())
-
-	raft.debug("tick=%d TIMEOUT_AT=%d reset heartbeat timeout", raft.Clock.CurrentTick(), nextTimeoutAtTick)
-
-	raft.mutableState.nextLeaderHeartbeatTimeout = nextTimeoutAtTick
-}
-
 func (raft *Raft) startElection() ([]OutgoingMessage, error) {
+	fmt.Println("startElection()")
 	raft.debug("NEW_ELECTION")
 
-	request := newInFlightRequest(raft.newRequestID(), nil)
+	request := newInFlightRequest(raft.newRequestID(), nil, raft.Clock.CurrentTick()+100)
 
-	if err := raft.requestQueue.Push(request); err != nil {
-		return nil, fmt.Errorf("queuing request vote request: %w", err)
+	if raft.requests.Size() >= int(raft.Config.MaxInFlightRequests) {
+		return nil, fmt.Errorf("request queue is full")
 	}
+	raft.requests.Insert(request)
 
 	if err := raft.newTerm(); err != nil {
 		return nil, fmt.Errorf("starting election: starting new term: %w", err)
@@ -436,6 +429,7 @@ func withTerm(term uint64) newTermOption {
 }
 
 func (raft *Raft) newTerm(options ...newTermOption) error {
+	fmt.Println("newTerm()")
 	newState := CurrentTermState{
 		term:          raft.mutableState.currentTermState.term + 1,
 		votedFor:      0,
@@ -461,6 +455,7 @@ func (raft *Raft) newTerm(options ...newTermOption) error {
 }
 
 func (raft *Raft) voteFor(candidateID types.ReplicaID, candidateTerm uint64) error {
+	fmt.Println("voteFor()")
 	votedFor := raft.mutableState.currentTermState.votedFor
 	assert.True(votedFor == 0 || votedFor == candidateID, fmt.Sprintf("votedFor=%d cannot vote again after having voted", raft.mutableState.currentTermState.votedFor))
 
@@ -497,6 +492,7 @@ func (raft *Raft) Term() uint64 {
 }
 
 func (raft *Raft) transitionToState(state State) error {
+	fmt.Println("transitionToState()")
 	// TODO: do we need to store state in the stable storage? probably not
 	// because the replica starts as follower.
 	if raft.mutableState.state == state {
@@ -508,7 +504,7 @@ func (raft *Raft) transitionToState(state State) error {
 	switch state {
 	case Leader:
 		raft.debug("became leader, reset heartbeat timeout")
-		raft.resetLeaderHeartbeatTimeout()
+		raft.heartbeatTimeout.Reset()
 
 		raft.debug("append empty entry to log after becoming leader")
 		nextIndex := raft.Storage.LastLogIndex() + 1
@@ -526,7 +522,10 @@ func (raft *Raft) transitionToState(state State) error {
 	case Candidate:
 	case Follower:
 		raft.debug("transitioning to follower")
-		raft.resetElectionTimeout()
+		raft.leaderElectionTimeout.ResetAndFireAfter(raft.rand.GenBetween(
+			uint64(raft.Config.MinLeaderElectionTimeout.Milliseconds()),
+			uint64(raft.Config.MaxLeaderElectionTimeout.Milliseconds()),
+		))
 	default:
 		panic(fmt.Sprintf("unexpected state: %d", raft.mutableState.state))
 	}
@@ -537,6 +536,7 @@ func (raft *Raft) transitionToState(state State) error {
 }
 
 func (raft *Raft) OnMessage(from types.ReplicaID, message types.Message) {
+	fmt.Println("OnMessage()")
 	outgoingMessages, err := raft.handleMessage(message)
 	if err != nil {
 		raft.error("handling message: %s", err)
@@ -549,6 +549,7 @@ func (raft *Raft) OnMessage(from types.ReplicaID, message types.Message) {
 }
 
 func (raft *Raft) handleMessage(message types.Message) ([]OutgoingMessage, error) {
+	fmt.Println("handleMessage()")
 	// TODO: ensure term is updated to max(message.term, replica.term)
 
 	switch message := message.(type) {
@@ -564,6 +565,7 @@ func (raft *Raft) handleMessage(message types.Message) ([]OutgoingMessage, error
 		if err := raft.onAppendEntriesOutput(message); err != nil {
 			return nil, fmt.Errorf("handling append entries output: %w", err)
 		}
+		return nil, nil
 	case *types.RequestVoteInput:
 		outgoingMessage, err := raft.onRequestVoteInput(message)
 		if err != nil {
@@ -575,11 +577,10 @@ func (raft *Raft) handleMessage(message types.Message) ([]OutgoingMessage, error
 	default:
 		panic(fmt.Sprintf("unexpected message: %+v", message))
 	}
-
-	panic("unreachable")
 }
 
 func (raft *Raft) onUserRequestInput(message *types.UserRequestInput) ([]OutgoingMessage, error) {
+	fmt.Println("onUserRequestInput()")
 	assert.True(raft.State() == Leader, "must be leader to handle user request")
 
 	raft.debug("user request in received")
@@ -603,6 +604,7 @@ func (raft *Raft) onUserRequestInput(message *types.UserRequestInput) ([]Outgoin
 }
 
 func (raft *Raft) onAppendEntriesInput(message *types.AppendEntriesInput) (OutgoingMessage, error) {
+	fmt.Println("onAppendEntriesInput()")
 	raft.debug("AppendEntriesInput REPLICA=%d TERM=%d COMMIT_INDEX=%d PREVIOUS_LOG_INDEX=%d PREVIOUS_LOG_TERM=%d ENTRIES=%d",
 		message.LeaderID,
 		message.LeaderTerm,
@@ -683,7 +685,10 @@ func (raft *Raft) onAppendEntriesInput(message *types.AppendEntriesInput) (Outgo
 		return outgoingMessage, fmt.Errorf("appending entries to log: entries=%+v %w", message.Entries, err)
 	}
 
-	raft.resetElectionTimeout()
+	raft.leaderElectionTimeout.ResetAndFireAfter(raft.rand.GenBetween(
+		uint64(raft.Config.MinLeaderElectionTimeout.Milliseconds()),
+		uint64(raft.Config.MaxLeaderElectionTimeout.Milliseconds()),
+	))
 
 	if message.LeaderCommitIndex > raft.mutableState.commitIndex {
 		raft.debug("AppendEntriesInput leaderCommitIndex=%d commitIndex=%d will apply uncommitted entries",
@@ -711,6 +716,7 @@ func (raft *Raft) onAppendEntriesInput(message *types.AppendEntriesInput) (Outgo
 }
 
 func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) error {
+	fmt.Println("onAppendEntriesOutput()")
 	raft.debug("AppendEntriesOutput TERM=%d REPLICA=%d SUCCESS=%t PREVIOUS_LOG_INDEX=%d PREVIOUS_LOG_TERM=%d",
 		message.CurrentTerm,
 		message.ReplicaID,
@@ -724,45 +730,47 @@ func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) erro
 		return nil
 	}
 
-	request, found := raft.requestQueue.Find(func(request **request) bool { return (*request).requestID == message.MessageID })
+	req, found := raft.requests.Find(func(request **request) bool { return (*request).requestID == message.MessageID })
 	if !found {
 		raft.debug("message not found in queue ID=%d REPLICA=%d", message.MessageID, message.ReplicaID)
 		return nil
 	}
+	defer raft.requests.Remove(req)
 
-	if request.successes.Contains(message.ReplicaID) || request.failures.Contains(message.ReplicaID) {
+	if req.successes.Contains(message.ReplicaID) || req.failures.Contains(message.ReplicaID) {
 		raft.debug("duplicated message, ignore ID=%d REPLICA=%d", message.MessageID, message.ReplicaID)
 		return nil
 	}
 
 	if message.Success {
 		raft.debug("success=true append entries response ID=%d REPLICA=%d", message.MessageID, message.ReplicaID)
-		request.successes.Insert(message.ReplicaID)
+		req.successes.Insert(message.ReplicaID)
 	} else {
 		raft.debug("success=false append entries response ID=%d REPLICA=%d", message.MessageID, message.ReplicaID)
-		request.failures.Insert(message.ReplicaID)
+		req.failures.Insert(message.ReplicaID)
 	}
 
-	var doneChErr error
+	// var doneChErr error
 
-	if request.successes.Size() == int(raft.majority())-1 {
-		doneChErr = nil
+	if req.successes.Size() == int(raft.majority())-1 {
+		// doneChErr = nil
 		raft.debug("handleMessages: send nil to done channel")
-	} else if request.failures.Size() == int(raft.majority())-1 {
+	} else if req.failures.Size() == int(raft.majority())-1 {
 		raft.debug("handleMessages: send ErrNoQuorum to done channel")
-		doneChErr = ErrNoQuorum
+		// doneChErr = ErrNoQuorum
 
 	}
 
-	if request.doneCh != nil {
-		request.doneCh <- doneChErr
-		close(request.doneCh)
-	}
+	// if req.doneCh != nil {
+	// 	req.doneCh <- doneChErr
+	// 	close(req.doneCh)
+	// }
 
 	return nil
 }
 
 func (raft *Raft) onRequestVoteInput(message *types.RequestVoteInput) (OutgoingMessage, error) {
+	fmt.Println("onRequestVoteInput()")
 	raft.debug("RequestVoteInput REPLICA_ID=%d REPLICA_TERM=%d LOG_INDEX=%d LOG_TERM=%d",
 		message.CandidateID,
 		message.CandidateTerm,
@@ -831,6 +839,7 @@ func (raft *Raft) onRequestVoteInput(message *types.RequestVoteInput) (OutgoingM
 }
 
 func (raft *Raft) onRequestVoteOutput(message *types.RequestVoteOutput) ([]OutgoingMessage, error) {
+	fmt.Println("onRequestVoteOutput()")
 	raft.debug("RequestVoteOutput REPLICA=%d REPLICA_TERM=%d VOTE_GRANTED=%t ", message.ReplicaID, message.CurrentTerm, message.VoteGranted)
 
 	if message.CurrentTerm > raft.mutableState.currentTermState.term {
@@ -847,20 +856,29 @@ func (raft *Raft) onRequestVoteOutput(message *types.RequestVoteOutput) ([]Outgo
 		raft.mutableState.currentTermState.votesReceived[message.ReplicaID] = true
 
 		if raft.votesReceived() >= raft.majority()-1 {
-			if err := raft.transitionToState(Leader); err != nil {
-				return nil, fmt.Errorf("transitioning to leader: %w", err)
-			}
-			// Send empty heartbeat to avoid the other replicas election timeouts.
-			raft.debug("NEW LEADER. SENDING HEARTBEAT")
-			outgoingMessages, err := raft.sendHeartbeat()
+			outgoingMessages, err := raft.becomeLeader()
 			if err != nil {
-				return outgoingMessages, fmt.Errorf("new leader: generating heartbeats: %w", err)
+				return outgoingMessages, fmt.Errorf("becoming leader: %w", err)
 			}
 			return outgoingMessages, nil
 		}
 	}
 
 	return nil, nil
+}
+
+func (raft *Raft) becomeLeader() ([]OutgoingMessage, error) {
+	fmt.Println("becomeLeader()")
+	if err := raft.transitionToState(Leader); err != nil {
+		return nil, fmt.Errorf("transitioning to leader: %w", err)
+	}
+	// Send empty heartbeat to avoid the other replicas election timeouts.
+	raft.debug("NEW LEADER. SENDING HEARTBEAT")
+	outgoingMessages, err := raft.sendHeartbeat()
+	if err != nil {
+		return outgoingMessages, fmt.Errorf("new leader: generating heartbeats: %w", err)
+	}
+	return outgoingMessages, nil
 }
 
 func (raft *Raft) votesReceived() uint16 {
@@ -888,12 +906,15 @@ func (raft *Raft) getNextBatchForReplica(replicaID types.ReplicaID) ([]types.Ent
 }
 
 func (raft *Raft) sendHeartbeat() ([]OutgoingMessage, error) {
+	fmt.Println("sendHeartbeat()")
 	raft.debug("heartbeat in flight")
 
-	request := newInFlightRequest(raft.newRequestID(), nil)
-	if err := raft.requestQueue.Push(request); err != nil {
-		return nil, fmt.Errorf("queuing heartbeat request: %w", err)
+	request := newInFlightRequest(raft.newRequestID(), nil, raft.Clock.CurrentTick()+100)
+
+	if raft.requests.Size() >= int(raft.Config.MaxInFlightRequests) {
+		return nil, fmt.Errorf("request queue is full")
 	}
+	raft.requests.Insert(request)
 
 	messages := make([]OutgoingMessage, 0, len(raft.Config.Replicas)-1)
 
@@ -954,7 +975,7 @@ func (raft *Raft) sendHeartbeat() ([]OutgoingMessage, error) {
 	// }
 
 	raft.debug("sent heartbeat, reset heartbeat timeout")
-	raft.resetLeaderHeartbeatTimeout()
+	raft.heartbeatTimeout.Reset()
 
 	return messages, nil
 }
@@ -984,6 +1005,7 @@ func (raft *Raft) hasVoted() bool {
 }
 
 func (raft *Raft) applyCommittedEntries(leaderCommitIndex uint64, lastlogIndex uint64) error {
+	fmt.Println("applyCommittedEntries()")
 	raft.debug("leaderCommitIndex=%d lastLogIndex=%d applying uncomitted entries",
 		leaderCommitIndex,
 		lastlogIndex,

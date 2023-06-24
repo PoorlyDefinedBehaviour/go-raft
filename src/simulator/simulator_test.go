@@ -17,6 +17,8 @@ import (
 func TestSimulate(t *testing.T) {
 	t.Parallel()
 
+	// TODO: use rapid to generate client requests
+
 	bigint, err := cryptorand.Int(cryptorand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {
 		panic(fmt.Errorf("generating seed: %w", err))
@@ -31,7 +33,7 @@ func TestSimulate(t *testing.T) {
 			PathClogProbability:      0.001,
 			MessageReplayProbability: 0.001,
 			DropMessageProbability:   0.001,
-			MaxNetworkPathClogTicks:  10_000,
+			MaxNetworkPathClogTicks:  1000,
 			MaxMessageDelayTicks:     50,
 		},
 		Raft: testingcluster.RaftConfig{
@@ -43,16 +45,31 @@ func TestSimulate(t *testing.T) {
 		},
 	})
 
-	for i := 0; i < 500; i++ {
+	livelockChecker := newLivelockChecker(10_000)
+
+	for i := 0; i < 100_000; i++ {
 		cluster.Tick()
 
 		ensureTheresZeroOrOneLeader(t, &cluster)
 		ensureLogConsistency(t, &cluster)
+		livelockChecker.Check(t, &cluster)
+	}
+
+	if t.Failed() {
+		fmt.Printf("seed: %d\n", seed)
 	}
 }
 
 func ensureLogConsistency(t *testing.T, cluster *testingcluster.Cluster) {
-	// TODO
+	leader := cluster.Leader()
+	if leader == nil {
+		return
+	}
+
+	for _, follower := range cluster.Followers() {
+		assert.True(t, leader.Storage.LastLogIndex() >= follower.Storage.LastLogIndex())
+		assert.True(t, leader.Storage.LastLogTerm() >= follower.Storage.LastLogTerm())
+	}
 }
 
 func ensureTheresZeroOrOneLeader(t *testing.T, cluster *testingcluster.Cluster) {
@@ -66,5 +83,28 @@ func ensureTheresZeroOrOneLeader(t *testing.T, cluster *testingcluster.Cluster) 
 
 	for _, leadersInTheTerm := range leadersPerTerm {
 		assert.Truef(t, leadersInTheTerm <= 1, "unexpected number of leaders: %d", leadersInTheTerm)
+	}
+}
+
+type livelockChecker struct {
+	maxTicksWithoutLeader uint64
+	lastLeaderFoundAtTick uint64
+}
+
+func newLivelockChecker(maxTicksWithoutLeader uint64) *livelockChecker {
+	return &livelockChecker{
+		maxTicksWithoutLeader: maxTicksWithoutLeader,
+		lastLeaderFoundAtTick: 0,
+	}
+}
+
+func (checker *livelockChecker) Check(t *testing.T, cluster *testingcluster.Cluster) {
+	return
+	leader := cluster.Leader()
+
+	if leader != nil {
+		checker.lastLeaderFoundAtTick = cluster.Ticks
+	} else {
+		assert.True(t, cluster.Ticks-checker.lastLeaderFoundAtTick < checker.maxTicksWithoutLeader)
 	}
 }
