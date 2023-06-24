@@ -44,7 +44,6 @@ type TestReplica struct {
 }
 
 func (replica *TestReplica) crash(cluster *Cluster) {
-	fmt.Println("replica.crash()")
 	crashUntilTick := cluster.replicaCrashedUntilTick()
 
 	cluster.debug("CRASH UNTIL_TICK=%d REPLICA=%d", crashUntilTick, replica.Config.ReplicaID)
@@ -54,7 +53,6 @@ func (replica *TestReplica) crash(cluster *Cluster) {
 }
 
 func (replica *TestReplica) restart(cluster *Cluster) {
-	fmt.Println("replica.restart()")
 	cluster.debug("RESTART REPLICA=%d", replica.Config.ReplicaID)
 
 	storage, err := storage.NewFileStorage(replica.Storage.Directory())
@@ -126,7 +124,6 @@ func (cluster *Cluster) MustWaitForLeader() *TestReplica {
 }
 
 func (cluster *Cluster) mustWaitForReplicaWithStatus(state raft.State) *TestReplica {
-	fmt.Println("cluster.mustWaitForReplicaWithStatus()")
 	const maxTicks = 10_000
 
 	for i := 0; i < maxTicks; i++ {
@@ -143,7 +140,6 @@ func (cluster *Cluster) mustWaitForReplicaWithStatus(state raft.State) *TestRepl
 }
 
 func (cluster *Cluster) TickUntilEveryMessageIsDelivered() {
-	fmt.Println("cluster.TickUntilEveryMessageIsDelivered()")
 	for cluster.Network.HasPendingMessages() {
 		cluster.Tick()
 	}
@@ -180,7 +176,6 @@ func (cluster *Cluster) Tick() {
 }
 
 func (cluster *Cluster) Leader() *TestReplica {
-	fmt.Println("cluster.Leader()")
 	for _, replica := range cluster.Replicas {
 		if replica.Raft.State() == raft.Leader {
 			return replica

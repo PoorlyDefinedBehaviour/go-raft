@@ -1,8 +1,6 @@
 package messagebus
 
 import (
-	"fmt"
-
 	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 )
@@ -21,7 +19,6 @@ func (bus *MessageBus) Tick() {
 }
 
 func (bus *MessageBus) Send(from, to types.ReplicaID, message types.Message) {
-	fmt.Println("bus.Send()")
 	assert.True(message.ID() != 0, "message id is required")
 	assert.True(from != to, "replica cannot send message to itself")
 

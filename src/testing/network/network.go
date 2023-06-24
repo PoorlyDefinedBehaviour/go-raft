@@ -118,7 +118,6 @@ func (network *Network) MessagesFromTo(from, to types.ReplicaID) []types.Message
 }
 
 func (network *Network) Send(from, to types.ReplicaID, message types.Message) {
-	fmt.Println("network.Send()")
 	assert.True(from != to, "replica cannot send message to itself")
 
 	switch message.(type) {
@@ -155,7 +154,6 @@ func (network *Network) randomDelay() uint64 {
 // Returns `true` when there are messages in the network that will be
 // delivered some time in the future.
 func (network *Network) HasPendingMessages() bool {
-	fmt.Println("network.HasPendingMessages()")
 	return len(network.sendMessageQueue) > 0
 }
 
