@@ -1,0 +1,140 @@
+# 2023/06/24 19:52:01.705555 [TestTimeout] [rapid] draw after: 0x28
+# 2023/06/24 19:52:01.705707 [TestTimeout] [rapid] draw ops: []string{"reset", "at", "tick", "tick", "ticks", "fired", "ticks", "tick", "reset", "resetAndFireAfter", "tick", "tick", "reset", "resetAndFireAfter", "tick", "tick", "fired", "tick", "resetAndFireAfter", "at", "fired", "ticks", "resetAndFireAfter", "ticks", "tick", "tick", "ticks"}
+# 2023/06/24 19:52:01.705733 [TestTimeout] [rapid] draw newAfter: 0x3
+# 2023/06/24 19:52:01.705752 [TestTimeout] [rapid] draw newAfter: 0x1
+# 2023/06/24 19:52:01.705766 [TestTimeout] [rapid] draw newAfter: 0xc
+# 2023/06/24 19:52:01.705859 [TestTimeout] 
+# 	Error Trace:	/Users/brunofelipefrancisco/dev/go-raft/src/timeout/timeout_test.go:59
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:367
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:376
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:202
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:117
+# 	            				/Users/brunofelipefrancisco/dev/go-raft/src/timeout/timeout_test.go:23
+# 	Error:      	Not equal: 
+# 	            	expected: 0x3
+# 	            	actual  : 0x0
+# 	Test:       	TestTimeout
+# 2023/06/24 19:52:01.705880 [TestTimeout] [rapid] draw newAfter: 0x7c55c
+# 2023/06/24 19:52:01.705984 [TestTimeout] 
+# 	Error Trace:	/Users/brunofelipefrancisco/dev/go-raft/src/timeout/timeout_test.go:59
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:367
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:376
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:202
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:117
+# 	            				/Users/brunofelipefrancisco/dev/go-raft/src/timeout/timeout_test.go:23
+# 	Error:      	Not equal: 
+# 	            	expected: 0x3
+# 	            	actual  : 0x0
+# 	Test:       	TestTimeout
+# 2023/06/24 19:52:01.706090 [TestTimeout] 
+# 	Error Trace:	/Users/brunofelipefrancisco/dev/go-raft/src/timeout/timeout_test.go:59
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:367
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:376
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:202
+# 	            				/Users/brunofelipefrancisco/go/pkg/mod/pgregory.net/rapid@v1.0.0/engine.go:117
+# 	            				/Users/brunofelipefrancisco/dev/go-raft/src/timeout/timeout_test.go:23
+# 	Error:      	Not equal: 
+# 	            	expected: 0x5
+# 	            	actual  : 0x2
+# 	Test:       	TestTimeout
+# 
+v0.4.8#573445207491989828
+0xd2a701a6be2ce
+0x28
+0x1ca8fedb36dce9
+0x2c8e2ac7b6824
+0x1
+0x12aba3a85e0f42
+0x196d30b032ef1e
+0x4
+0x102d3251aad25e
+0x958aa18dc6a38
+0x0
+0x161d0e94d2cdd4
+0xa4d9fd10d166e
+0x0
+0x661cc7c8d1991
+0x1d1d173ad56687
+0x5
+0xe21b3d771f849
+0xc93842984c689
+0x6
+0x2
+0xcf51a08271329
+0x1b441af7d50ea2
+0x5
+0x131234fbc589ed
+0x197ef853ae4279
+0x6
+0x0
+0x1f3d68d3b7d904
+0x9cd34ce7a6252
+0x1
+0x114586ec56bc22
+0x167b81c83461e8
+0x6
+0x3
+0x14002c763cd9ff
+0xa7ff456811a5c
+0x0
+0xc49489f6e6be4
+0x9d7a1367aa23
+0x0
+0x1d495c45799187
+0x6ecda9db7786d
+0x7
+0x1
+0x1a9ef4ec5cf624
+0x10d46e69703144
+0x3
+0x1940e4f0baeb62
+0x17e91aa6c13bad
+0x0
+0x72391588d9451
+0xd240522ad6fc9
+0x0
+0xa975c66aef017
+0x184178a1eebbe9
+0x2
+0x169706fdb72f58
+0x1b2245e0489ada
+0x0
+0x1de3fe52657c1e
+0xbc3612cde4db1
+0x7
+0x6
+0x3
+0x12822344197ce9
+0x16c8d30185be32
+0x7
+0x4
+0x176ce7c528bb08
+0xe11fa4723a0b5
+0x2
+0x1fe909ebcbb87e
+0x91c4b86775ba6
+0x5
+0x8b12b601f3953
+0xc1f67e2b34bfd
+0x3
+0x10090e3b7e5b79
+0x114b7f6b2b668d
+0x5
+0x13da35162a888d
+0x120492a4954645
+0x0
+0x1ba063a6d2e6da
+0x62443022b2e15
+0x0
+0xca647d40c26df
+0x14bbd1b6716492
+0x5
+0x26dadf9f052ca
+0x6305d36e2ebf3
+0x3
+0x1cc0fea9fb549
+0x1
+0x106d54c7e7d85f
+0xc
+0x1c45081e828f57
+0x7c55c

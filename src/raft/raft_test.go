@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/poorlydefinedbehaviour/raft-go/src/constants"
 	"github.com/poorlydefinedbehaviour/raft-go/src/kv"
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
+	"github.com/poorlydefinedbehaviour/raft-go/src/slicesx"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
@@ -29,6 +31,7 @@ type Cluster struct {
 	Network  *network.Network
 	Bus      *messagebus.MessageBus
 	Rand     *rand.DefaultRandom
+	ticks    uint64
 }
 
 type TestReplica struct {
@@ -40,6 +43,69 @@ type TestReplica struct {
 	// Maybe it is possible to use only testing/cluster if the
 	// import cycle is removed.
 	Kv *kv.KvStore
+
+	// Replica is offline until tick.
+	crashedUntilTick uint64
+
+	// Is the replica running right now?
+	isRunning bool
+}
+
+func (replica *TestReplica) TickUntilElectionTimeout() {
+	timeoutAt := replica.leaderElectionTimeout.After() - replica.leaderElectionTimeout.Ticks()
+
+	for i := uint64(0); i < timeoutAt; i++ {
+		replica.Tick()
+	}
+}
+
+func (replica *TestReplica) TickUntilHeartbeatTimeout() {
+	timeoutAt := replica.heartbeatTimeout.After() - replica.heartbeatTimeout.Ticks()
+
+	for i := uint64(0); i < timeoutAt; i++ {
+		replica.Tick()
+	}
+}
+
+func (replica *TestReplica) UntilUntilHeartbeatTImeout() {
+	timeoutAt := replica.heartbeatTimeout.After() - replica.heartbeatTimeout.Ticks()
+
+	for i := uint64(0); i < timeoutAt; i++ {
+		replica.Tick()
+	}
+}
+
+func (cluster *Cluster) crash(replicaID types.ReplicaID) {
+	crashUntilTick := cluster.replicaCrashedUntilTick()
+
+	cluster.debug("CRASH UNTIL_TICK=%d REPLICA=%d", crashUntilTick, replicaID)
+
+	replica, found := slicesx.Find(cluster.Replicas, func(r *TestReplica) bool {
+		return r.Config.ReplicaID == replicaID
+	})
+	if !found {
+		panic(fmt.Sprintf("replica %d not found: replicas=%+v", replicaID, cluster.Replicas))
+	}
+
+	replica.crashedUntilTick = crashUntilTick
+	replica.isRunning = false
+}
+
+func (cluster *Cluster) debug(template string, args ...interface{}) {
+	if !constants.Debug {
+		return
+	}
+
+	message := fmt.Sprintf(template, args...)
+
+	fmt.Printf("CLUSTER: TICK=%d %s\n",
+		cluster.ticks,
+		message,
+	)
+}
+
+func (cluster *Cluster) replicaCrashedUntilTick() uint64 {
+	return cluster.ticks + cluster.Rand.GenBetween(0, cluster.Config.Raft.MaxReplicaCrashTicks)
 }
 
 func (cluster *Cluster) Followers() []TestReplica {
@@ -54,28 +120,31 @@ func (cluster *Cluster) Followers() []TestReplica {
 	return replicas
 }
 
-func (cluster *Cluster) MustWaitForCandidate() TestReplica {
+func (cluster *Cluster) MustWaitForCandidate() *TestReplica {
 	return cluster.mustWaitForReplicaWithStatus(Candidate)
 }
 
-func (cluster *Cluster) MustWaitForLeader() TestReplica {
+func (cluster *Cluster) MustWaitForLeader() *TestReplica {
 	return cluster.mustWaitForReplicaWithStatus(Leader)
 }
 
-func (cluster *Cluster) mustWaitForReplicaWithStatus(state State) TestReplica {
-	const maxTicks = 350
+func (cluster *Cluster) mustWaitForReplicaWithStatus(state State) *TestReplica {
+	const maxTicks = 500
 
 	for i := 0; i < maxTicks; i++ {
 		cluster.Tick()
 
-		for _, replica := range cluster.Replicas {
-			if replica.State() == state {
-				return replica
+		for i := 0; i < len(cluster.Replicas); i++ {
+			if !cluster.Replicas[i].isRunning {
+				continue
+			}
+			if cluster.Replicas[i].State() == state {
+				return &cluster.Replicas[i]
 			}
 		}
 	}
 
-	panic("unable to elect a leader in time")
+	panic(fmt.Sprintf("unable to find replica with %s state", state))
 }
 
 func (cluster *Cluster) TickUntilEveryMessageIsDelivered() {
@@ -85,11 +154,14 @@ func (cluster *Cluster) TickUntilEveryMessageIsDelivered() {
 }
 
 func (cluster *Cluster) Tick() {
+	cluster.ticks++
 	cluster.Bus.Tick()
 	cluster.Network.Tick()
 
 	for _, replica := range cluster.Replicas {
-		replica.Raft.Tick()
+		if replica.isRunning {
+			replica.Raft.Tick()
+		}
 	}
 }
 
@@ -198,7 +270,7 @@ func Setup(configs ...ClusterConfig) Cluster {
 		if err != nil {
 			panic(err)
 		}
-		replicas = append(replicas, TestReplica{Raft: raft, Kv: kv})
+		replicas = append(replicas, TestReplica{Raft: raft, Kv: kv, isRunning: true})
 	}
 
 	replicasOnMessage := make(map[types.ReplicaID]types.MessageCallback)
@@ -407,16 +479,17 @@ func TestHandleMessageAppendEntriesInput(t *testing.T) {
 		outgoingMessages, err := replica.handleMessage(&inputMessage)
 		assert.NoError(t, err)
 
-		expected := []OutgoingMessage{{
-			To: leader.Config.ReplicaID,
-			Message: &types.AppendEntriesOutput{
-				ReplicaID:        replica.Config.ReplicaID,
-				CurrentTerm:      term,
-				Success:          false,
-				PreviousLogIndex: 0,
-				PreviousLogTerm:  0,
+		expected := []OutgoingMessage{
+			{
+				To: leader.Config.ReplicaID,
+				Message: &types.AppendEntriesOutput{
+					ReplicaID:        replica.Config.ReplicaID,
+					CurrentTerm:      term,
+					Success:          false,
+					PreviousLogIndex: 0,
+					PreviousLogTerm:  0,
+				},
 			},
-		},
 		}
 
 		assert.Equal(t, expected, outgoingMessages)
@@ -442,14 +515,16 @@ func TestHandleMessageAppendEntriesInput(t *testing.T) {
 		outgoingMessages, err := replica.handleMessage(&appendEntriesInput)
 		assert.NoError(t, err)
 
-		expected := OutgoingMessage{
-			To: leader.Config.ReplicaID,
-			Message: &types.AppendEntriesOutput{
-				ReplicaID:        replica.Config.ReplicaID,
-				CurrentTerm:      leader.Term(),
-				Success:          false,
-				PreviousLogIndex: 0,
-				PreviousLogTerm:  0,
+		expected := []OutgoingMessage{
+			{
+				To: leader.Config.ReplicaID,
+				Message: &types.AppendEntriesOutput{
+					ReplicaID:        replica.Config.ReplicaID,
+					CurrentTerm:      leader.Term(),
+					Success:          false,
+					PreviousLogIndex: 0,
+					PreviousLogTerm:  0,
+				},
 			},
 		}
 
@@ -486,18 +561,20 @@ func TestHandleMessageAppendEntriesInput(t *testing.T) {
 		outgoingMessages, err := replica.handleMessage(&inputMessage)
 		assert.NoError(t, err)
 
-		expected := OutgoingMessage{
-			To: leader.Config.ReplicaID,
-			Message: &types.AppendEntriesOutput{
-				ReplicaID:        replica.Config.ReplicaID,
-				CurrentTerm:      leader.Term(),
-				Success:          true,
-				PreviousLogIndex: 0,
-				PreviousLogTerm:  0,
+		expected := []OutgoingMessage{
+			{
+				To: leader.Config.ReplicaID,
+				Message: &types.AppendEntriesOutput{
+					ReplicaID:        replica.Config.ReplicaID,
+					CurrentTerm:      leader.Term(),
+					Success:          true,
+					PreviousLogIndex: 1,
+					PreviousLogTerm:  2,
+				},
 			},
 		}
 
-		assert.Equal(t, expected, outgoingMessages)
+		assert.EqualValues(t, expected, outgoingMessages)
 
 		entry, err := replica.Storage.GetEntryAtIndex(1)
 		assert.NoError(t, err)
@@ -773,5 +850,349 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 		response = outgoingMessages[0].Message.(*types.RequestVoteOutput)
 		assert.False(t, response.VoteGranted)
 		assert.Equal(t, replica.mutableState.currentTermState.term, response.CurrentTerm)
+	})
+
+	t.Run("leader crashes and a new leader is elected", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		leader := cluster.MustWaitForLeader()
+
+		cluster.crash(leader.Config.ReplicaID)
+
+		newLeader := cluster.MustWaitForLeader()
+
+		assert.NotEqual(t, leader.Config.ReplicaID, newLeader.Config.ReplicaID)
+	})
+}
+
+func TestLeader(t *testing.T) {
+	t.Parallel()
+
+	t.Run("new leader commits empty entry", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		leader := cluster.MustWaitForLeader()
+
+		entry, err := leader.Storage.GetEntryAtIndex(1)
+		assert.NoError(t, err)
+
+		assert.Equal(t, &types.Entry{
+			Term:  leader.mutableState.currentTermState.term,
+			Type:  types.NewLeaderEntryType,
+			Value: nil,
+		}, entry)
+	})
+
+	t.Run("heartbeat timeout: leader sends heartbeat to followers", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		leader := cluster.MustWaitForLeader()
+
+		leader.TickUntilHeartbeatTimeout()
+
+		expected := []types.Message{
+			&types.AppendEntriesInput{
+				MessageID:         2,
+				LeaderID:          leader.Config.ReplicaID,
+				LeaderTerm:        leader.mutableState.currentTermState.term,
+				LeaderCommitIndex: leader.mutableState.commitIndex,
+				PreviousLogIndex:  leader.Storage.LastLogIndex() - 1,
+				PreviousLogTerm:   leader.Storage.LastLogTerm() - 1,
+				Entries: []types.Entry{
+					{
+						Term:  leader.Term(),
+						Type:  types.NewLeaderEntryType,
+						Value: nil,
+					},
+				},
+			},
+			// Send same entries again because replicas have not
+			// sent a response to the previous message.
+			&types.AppendEntriesInput{
+				MessageID:         3,
+				LeaderID:          leader.Config.ReplicaID,
+				LeaderTerm:        leader.mutableState.currentTermState.term,
+				LeaderCommitIndex: leader.mutableState.commitIndex,
+				PreviousLogIndex:  leader.Storage.LastLogIndex() - 1,
+				PreviousLogTerm:   leader.Storage.LastLogTerm() - 1,
+				Entries: []types.Entry{
+					{
+						Term:  leader.Term(),
+						Type:  types.NewLeaderEntryType,
+						Value: nil,
+					},
+				},
+			},
+		}
+
+		// Ensure leader sent heartbeat to followers.
+		for _, replica := range cluster.Followers() {
+			messages := cluster.Network.MessagesFromTo(leader.Config.ReplicaID, replica.Config.ReplicaID)
+
+			// 1 message because of the heartbeat sent by the newly elected leader.
+			// 1 message sent because of the heartbeat after the heartbeat timeout fired.
+			assert.Equal(t, len(expected), len(messages))
+			for i := 0; i < len(expected); i++ {
+
+				assert.Equal(t, expected[i], messages[i])
+			}
+		}
+	})
+
+	t.Run("leader keeps track of the next log index that will be sent to replicas", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("empty heartbeat", func(t *testing.T) {
+			t.Parallel()
+
+			// TODO
+		})
+
+		t.Run("non-empty heartbeat", func(t *testing.T) {
+			t.Parallel()
+
+			// TODO
+		})
+	})
+}
+
+func TestFollower(t *testing.T) {
+	t.Parallel()
+
+	t.Run("follower transitions to candidate when leader election timeout fires", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		replica := cluster.Followers()[0]
+
+		assert.Equal(t, Follower, replica.State())
+
+		replica.TickUntilElectionTimeout()
+
+		assert.Equal(t, Candidate, replica.State())
+	})
+}
+
+func TestCandidate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("candidate transitions to follower when there's another replica with a term >= to its term", func(t *testing.T) {
+		t.Parallel()
+
+		t.Run("append entries request", func(t *testing.T) {
+			t.Parallel()
+
+			cluster := Setup()
+
+			candidate := cluster.Replicas[0]
+			assert.NoError(t, candidate.transitionToState(Candidate))
+
+			leader := cluster.Replicas[1]
+			assert.NoError(t, leader.transitionToState(Leader))
+			assert.NoError(t, leader.newTerm(withTerm(candidate.mutableState.currentTermState.term+1)))
+
+			outgoingMessages, err := candidate.handleMessage(&types.AppendEntriesInput{
+				LeaderID:          leader.Config.ReplicaID,
+				LeaderTerm:        leader.mutableState.currentTermState.term,
+				LeaderCommitIndex: 0,
+				PreviousLogIndex:  0,
+				PreviousLogTerm:   0,
+				Entries:           make([]types.Entry, 0),
+			})
+			assert.NoError(t, err)
+			assert.Equal(t, 1, len(outgoingMessages))
+
+			assert.True(t, outgoingMessages[0].Message.(*types.AppendEntriesOutput).Success)
+
+			assert.Equal(t, Follower, candidate.State())
+			assert.Equal(t, leader.mutableState.currentTermState.term, candidate.mutableState.currentTermState.term)
+		})
+
+		t.Run("request vote request", func(t *testing.T) {
+			t.Parallel()
+
+			cluster := Setup()
+
+			candidateA := cluster.Replicas[0]
+			assert.NoError(t, candidateA.transitionToState(Candidate))
+
+			candidateB := cluster.Replicas[1]
+			assert.NoError(t, candidateB.transitionToState(Candidate))
+
+			assert.NoError(t, candidateA.newTerm(withTerm(candidateB.mutableState.currentTermState.term+1)))
+
+			cluster.Bus.Send(candidateA.Config.ReplicaID, candidateB.Config.ReplicaID, &types.RequestVoteInput{
+				MessageID:             1,
+				CandidateID:           candidateA.Config.ReplicaID,
+				CandidateTerm:         candidateA.mutableState.currentTermState.term,
+				CandidateLastLogIndex: 0,
+				CandidateLastLogTerm:  0,
+			},
+			)
+
+			cluster.Bus.Tick()
+			cluster.Network.Tick()
+
+			candidateB.Tick()
+
+			assert.Equal(t, Follower, candidateB.State())
+			assert.Equal(t, candidateA.mutableState.currentTermState.term, candidateB.mutableState.currentTermState.term)
+		})
+	})
+
+	t.Run("leader election timeout is reset when follower transitions to candidate", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		replica := cluster.Followers()[0]
+
+		replica.TickUntilElectionTimeout()
+
+		assert.Equal(t, Candidate, replica.State())
+		assert.False(t, replica.leaderElectionTimeout.Fired())
+	})
+
+	t.Run("candidate starts an election after transitioning from follower->candidate", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		candidate := cluster.Followers()[0]
+
+		candidate.TickUntilElectionTimeout()
+
+		expected := []types.Message{
+			&types.RequestVoteInput{
+				MessageID:             1,
+				CandidateID:           1,
+				CandidateTerm:         1,
+				CandidateLastLogIndex: 0,
+				CandidateLastLogTerm:  0,
+			},
+		}
+
+		for _, replica := range cluster.Replicas {
+			if replica.Config.ReplicaID == candidate.Config.ReplicaID {
+				continue
+			}
+
+			messages := cluster.Network.MessagesFromTo(candidate.Config.ReplicaID, replica.Config.ReplicaID)
+			assert.EqualValues(t, expected, messages)
+		}
+	})
+
+	t.Run("election timeout: candidate restarts election", func(t *testing.T) {
+		cluster := Setup()
+
+		// Replica became candidate and started election.
+		candidate := cluster.MustWaitForCandidate()
+
+		termBeforeElection := candidate.mutableState.currentTermState.term
+
+		// Election timed out, starts a new election.
+		candidate.TickUntilElectionTimeout()
+
+		// New election, new term.
+		assert.Equal(t, termBeforeElection+1, candidate.mutableState.currentTermState.term)
+
+		expected := []types.Message{
+			// Message from first election.
+			&types.RequestVoteInput{
+				MessageID:             1,
+				CandidateID:           candidate.Config.ReplicaID,
+				CandidateTerm:         1,
+				CandidateLastLogIndex: 0,
+				CandidateLastLogTerm:  0,
+			},
+			// Message from second election.
+			&types.RequestVoteInput{
+				MessageID:             2,
+				CandidateID:           candidate.Config.ReplicaID,
+				CandidateTerm:         2,
+				CandidateLastLogIndex: 0,
+				CandidateLastLogTerm:  0,
+			},
+		}
+
+		// Should have sent request vote message to replicas.
+		for _, replica := range cluster.Replicas {
+			if replica.Config.ReplicaID == candidate.Config.ReplicaID {
+				continue
+			}
+
+			messages := cluster.Network.MessagesFromTo(candidate.Config.ReplicaID, replica.Config.ReplicaID)
+			assert.EqualValues(t, expected, messages)
+		}
+	})
+
+	t.Run("candidate becomes leader iff it receives the majority of votes for the same term", func(t *testing.T) {
+		t.Parallel()
+
+		cluster := Setup()
+
+		candidate := cluster.Replicas[0]
+		assert.NoError(t, candidate.transitionToState(Candidate))
+
+		_, err := candidate.startElection()
+		assert.NoError(t, err)
+
+		// Candidate's log is empty.
+		assert.Equal(t, uint64(0), candidate.Storage.LastLogIndex())
+
+		replicaA := cluster.Replicas[1]
+
+		// Responses from previous terms are not taken into account.
+		_, err = candidate.handleMessage(&types.RequestVoteOutput{
+			CurrentTerm: candidate.mutableState.currentTermState.term - 1,
+			VoteGranted: true,
+		})
+		assert.NoError(t, err)
+
+		_, err = candidate.handleMessage(&types.RequestVoteOutput{
+			CurrentTerm: candidate.mutableState.currentTermState.term - 1,
+			VoteGranted: true,
+		})
+		assert.NoError(t, err)
+
+		assert.Equal(t, Candidate, candidate.State())
+
+		// Candidate votes itself when an election is started.
+		assert.Equal(t, uint16(1), candidate.votesReceived())
+
+		// Duplicated messages are ignored.
+		_, err = candidate.handleMessage(&types.RequestVoteOutput{
+			ReplicaID:   replicaA.Config.ReplicaID,
+			CurrentTerm: candidate.mutableState.currentTermState.term,
+			VoteGranted: true,
+		})
+		assert.NoError(t, err)
+
+		_, err = candidate.handleMessage(&types.RequestVoteOutput{
+			ReplicaID:   replicaA.Config.ReplicaID,
+			CurrentTerm: candidate.mutableState.currentTermState.term,
+			VoteGranted: true,
+		})
+		assert.NoError(t, err)
+
+		// Received two votes: itself and from replica A.
+		assert.Equal(t, uint16(2), candidate.votesReceived())
+
+		// Got majority votes, becomes leader.
+		assert.Equal(t, Leader, candidate.State())
+
+		// Process leader heartbeat.
+		cluster.Tick()
+
+		// Replica appends empty log entry upon becoming leader.
+		assert.Equal(t, uint64(1), candidate.Storage.LastLogIndex())
+		assert.Equal(t, candidate.mutableState.currentTermState.term, candidate.Storage.LastLogTerm())
 	})
 }

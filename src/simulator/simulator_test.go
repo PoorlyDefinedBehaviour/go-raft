@@ -47,7 +47,7 @@ func TestSimulate(t *testing.T) {
 
 	livelockChecker := newLivelockChecker(10_000)
 
-	for i := 0; i < 100_000; i++ {
+	for i := 0; i < 50_000; i++ {
 		cluster.Tick()
 
 		ensureTheresZeroOrOneLeader(t, &cluster)
@@ -66,14 +66,13 @@ func ensureLogConsistency(t *testing.T, cluster *testingcluster.Cluster) {
 		return
 	}
 
-	fmt.Printf("REPLICA=%d leader logs", leader.Config.ReplicaID)
-	leader.Storage.Debug()
+	fmt.Printf("REPLICA=%d leader logs: %+v\n", leader.Config.ReplicaID, leader.Storage.Debug())
 
 	for _, follower := range cluster.Followers() {
 		assert.True(t, leader.Storage.LastLogIndex() >= follower.Storage.LastLogIndex())
 		assert.True(t, leader.Storage.LastLogTerm() >= follower.Storage.LastLogTerm())
 
-		fmt.Printf("REPLICA=%d follower logs", follower.Config.ReplicaID)
+		fmt.Printf("REPLICA=%d follower logs: %+v\n", follower.Config.ReplicaID, follower.Storage.Debug())
 	}
 }
 

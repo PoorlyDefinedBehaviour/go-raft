@@ -89,12 +89,6 @@ type MutableState struct {
 	// The current state of this replica.
 	state State
 
-	// When the next leader election timeout will fire.
-	nextLeaderElectionTimeout uint64
-
-	// As a leader, when the next heartbeat should be sent to replicas.
-	nextLeaderHeartbeatTimeout uint64
-
 	nextIndex map[types.ReplicaID]uint64
 }
 
@@ -173,9 +167,7 @@ func New(
 				votedFor:      0,
 				votesReceived: make(map[uint16]bool),
 			},
-			nextLeaderElectionTimeout:  0,
-			nextLeaderHeartbeatTimeout: 0,
-			nextIndex:                  nil,
+			nextIndex: nil,
 		},
 		heartbeatTimeout: timeout.New(uint64(config.LeaderHeartbeatTimeout.Milliseconds())),
 		leaderElectionTimeout: timeout.New(rand.GenBetween(
@@ -251,7 +243,7 @@ func (raft *Raft) debug(template string, args ...interface{}) {
 func (raft *Raft) error(template string, args ...interface{}) {
 	message := fmt.Sprintf(template, args...)
 
-	message = fmt.Sprintf("%s(%d) T=%d %s\n",
+	fmt.Printf("%s(%d) T=%d %s\n",
 		stateLetter(raft.State()),
 		raft.Config.ReplicaID,
 		raft.mutableState.currentTermState.term,
@@ -286,7 +278,6 @@ func newInFlightRequest(requestID uint64, doneCh chan error, timeout uint64) *re
 }
 
 func (raft *Raft) Tick() {
-	fmt.Printf("REPLICA=%d raft.Tick()\n", raft.Config.ReplicaID)
 	raft.Clock.Tick()
 	raft.heartbeatTimeout.Tick()
 	raft.leaderElectionTimeout.Tick()
@@ -340,26 +331,24 @@ func (raft *Raft) onLeaderElectionTimeout() ([]OutgoingMessage, error) {
 		uint64(raft.Config.MaxLeaderElectionTimeout.Milliseconds()),
 	))
 
-	switch raft.State() {
-	case Follower:
-		raft.debug("follower: leader did not end heartbeat, becoming candidate")
+	if raft.State() == Leader {
+		return nil, nil
+	}
+
+	if raft.State() == Follower {
+		raft.debug("follower: leader did not send heartbeat, becoming candidate")
 		if err := raft.transitionToState(Candidate); err != nil {
 			return nil, fmt.Errorf("transitioning from follower to candidate: %w", err)
 		}
-	case Candidate:
-		raft.debug("candidate: election timed out")
-		outgoingMessages, err := raft.startElection()
-		if err != nil {
-			return outgoingMessages, fmt.Errorf("starting election: %w", err)
-		}
-		return outgoingMessages, nil
-	case Leader:
-		return nil, nil
-	default:
-		panic(fmt.Sprintf("unknown raft state: %d", raft.State().value))
 	}
 
-	return nil, nil
+	raft.debug("candidate: election timed out, starting new election")
+	outgoingMessages, err := raft.startElection()
+	if err != nil {
+		return outgoingMessages, fmt.Errorf("starting election: %w", err)
+	}
+
+	return outgoingMessages, nil
 }
 
 func (raft *Raft) majority() uint16 {
@@ -862,6 +851,7 @@ func (raft *Raft) becomeLeader() ([]OutgoingMessage, error) {
 	if err != nil {
 		return outgoingMessages, fmt.Errorf("new leader: generating heartbeats: %w", err)
 	}
+
 	return outgoingMessages, nil
 }
 

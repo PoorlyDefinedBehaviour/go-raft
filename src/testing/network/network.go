@@ -1,6 +1,7 @@
 package network
 
 import (
+	"container/heap"
 	"fmt"
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
@@ -135,8 +136,6 @@ func (network *Network) Send(from, to types.ReplicaID, message types.Message) {
 		panic(fmt.Sprintf("unexpected message type: %+v", message))
 	}
 
-	network.callbacks[to](from, message)
-
 	messageToSend := &MessageToSend{
 		CanBeDeliveredAtTick: network.randomDelay(),
 		From:                 from,
@@ -144,11 +143,11 @@ func (network *Network) Send(from, to types.ReplicaID, message types.Message) {
 		Message:              message,
 	}
 
-	network.sendMessageQueue.Push(messageToSend)
+	heap.Push(&network.sendMessageQueue, messageToSend)
 }
 
 func (network *Network) randomDelay() uint64 {
-	return network.ticks + network.rand.GenBetween(0, network.config.MaxMessageDelayTicks)
+	return network.ticks + network.rand.GenBetween(0, network.config.MaxMessageDelayTicks) + 1
 }
 
 // Returns `true` when there are messages in the network that will be
@@ -173,7 +172,7 @@ func (network *Network) Tick() {
 	}
 
 	for len(network.sendMessageQueue) > 0 {
-		oldestMessage := network.sendMessageQueue.Pop().(*MessageToSend)
+		oldestMessage := heap.Pop(&network.sendMessageQueue).(*MessageToSend)
 
 		if oldestMessage.CanBeDeliveredAtTick > network.ticks {
 			network.sendMessageQueue.Push(oldestMessage)

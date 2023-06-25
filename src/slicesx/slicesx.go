@@ -1,11 +1,21 @@
 package slicesx
 
-func Map[T any, U any](xs []T, f func(*T) U) []U {
+func Map[T any, U any](xs []T, predicate func(*T) U) []U {
 	out := make([]U, 0, len(xs))
 
 	for _, x := range xs {
-		out = append(out, f(&x))
+		out = append(out, predicate(&x))
 	}
 
 	return out
+}
+
+func Find[T any](xs []T, predicate func(*T) bool) (*T, bool) {
+	for i := 0; i < len(xs); i++ {
+		if predicate(&xs[i]) {
+			return &xs[i], true
+		}
+	}
+
+	return nil, false
 }

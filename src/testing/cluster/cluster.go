@@ -16,6 +16,7 @@ import (
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
 	"github.com/poorlydefinedbehaviour/raft-go/src/raft"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
+	"github.com/poorlydefinedbehaviour/raft-go/src/slicesx"
 	"github.com/poorlydefinedbehaviour/raft-go/src/storage"
 	testingclock "github.com/poorlydefinedbehaviour/raft-go/src/testing/clock"
 	"github.com/poorlydefinedbehaviour/raft-go/src/testing/network"
@@ -43,60 +44,71 @@ type TestReplica struct {
 	isRunning bool
 }
 
-func (replica *TestReplica) crash(cluster *Cluster) {
-	crashUntilTick := cluster.replicaCrashedUntilTick()
-
-	cluster.debug("CRASH UNTIL_TICK=%d REPLICA=%d", crashUntilTick, replica.Config.ReplicaID)
-
-	replica.crashedUntilTick = crashUntilTick
-	replica.isRunning = false
-}
-
-func (replica *TestReplica) restart(cluster *Cluster) {
-	cluster.debug("RESTART REPLICA=%d", replica.Config.ReplicaID)
-
-	storage, err := storage.NewFileStorage(replica.Storage.Directory())
-	if err != nil {
-		panic(err)
-	}
-	kv := kv.NewKvStore(cluster.Bus)
-	raft, err := raft.New(raft.Config{
-		ReplicaID:                replica.Config.ReplicaID,
-		Replicas:                 replica.Config.Replicas,
-		MaxLeaderElectionTimeout: replica.Config.MaxLeaderElectionTimeout,
-		MinLeaderElectionTimeout: replica.Config.MinLeaderElectionTimeout,
-		LeaderHeartbeatTimeout:   replica.Config.LeaderHeartbeatTimeout,
-	}, cluster.Bus, storage, kv, cluster.Rand, replica.Clock)
-	if err != nil {
-		panic(err)
-	}
-	replica.Raft = raft
-	replica.Kv = kv
-	replica.crashedUntilTick = 0
-	replica.isRunning = true
-}
-
 func (replica *TestReplica) isAlive(tick uint64) bool {
 	return replica.crashedUntilTick <= tick
 }
 
 type TestClient struct{}
 
-func (client *TestClient) Tick() {
+func (cluster *Cluster) crash(replicaID types.ReplicaID) {
+	crashUntilTick := cluster.replicaCrashedUntilTick()
 
+	cluster.debug("CRASH UNTIL_TICK=%d REPLICA=%d", crashUntilTick, replicaID)
+
+	replica, found := slicesx.Find(cluster.Replicas, func(r **TestReplica) bool {
+		return (*r).Config.ReplicaID == replicaID
+	})
+	if !found {
+		panic(fmt.Sprintf("replica %d not found: replicas=%+v", replicaID, cluster.Replicas))
+	}
+
+	(*replica).crashedUntilTick = crashUntilTick
+	(*replica).isRunning = false
+}
+
+func (cluster *Cluster) restart(replicaID types.ReplicaID) {
+	cluster.debug("RESTART REPLICA=%d", replicaID)
+
+	replica, found := slicesx.Find(cluster.Replicas, func(r **TestReplica) bool {
+		return (*r).Config.ReplicaID == replicaID
+	})
+	if !found {
+		panic(fmt.Sprintf("replica %d not found: replicas=%+v", replicaID, cluster.Replicas))
+	}
+
+	storage, err := storage.NewFileStorage((*replica).Storage.Directory())
+	if err != nil {
+		panic(err)
+	}
+	kv := kv.NewKvStore(cluster.Bus)
+	raft, err := raft.New(raft.Config{
+		ReplicaID:                (*replica).Config.ReplicaID,
+		Replicas:                 (*replica).Config.Replicas,
+		MaxLeaderElectionTimeout: (*replica).Config.MaxLeaderElectionTimeout,
+		MinLeaderElectionTimeout: (*replica).Config.MinLeaderElectionTimeout,
+		LeaderHeartbeatTimeout:   (*replica).Config.LeaderHeartbeatTimeout,
+		MaxInFlightRequests:      20,
+	}, cluster.Bus, storage, kv, cluster.Rand, (*replica).Clock)
+	if err != nil {
+		panic(err)
+	}
+	(*replica).Raft = raft
+	(*replica).Kv = kv
+	(*replica).crashedUntilTick = 0
+	(*replica).isRunning = true
 }
 
 func (cluster *Cluster) debug(template string, args ...interface{}) {
+	if !constants.Debug {
+		return
+	}
+
 	message := fmt.Sprintf(template, args...)
 
-	message = fmt.Sprintf("CLUSTER: TICK=%d %s\n",
+	fmt.Printf("CLUSTER: TICK=%d %s\n",
 		cluster.Ticks,
 		message,
 	)
-
-	if constants.Debug {
-		fmt.Println(message)
-	}
 }
 
 func (cluster *Cluster) replicaCrashedUntilTick() uint64 {
@@ -129,9 +141,9 @@ func (cluster *Cluster) mustWaitForReplicaWithStatus(state raft.State) *TestRepl
 	for i := 0; i < maxTicks; i++ {
 		cluster.Tick()
 
-		for _, replica := range cluster.Replicas {
-			if replica.State() == state {
-				return replica
+		for i := 0; i < len(cluster.Replicas); i++ {
+			if cluster.Replicas[i].State() == state {
+				return cluster.Replicas[i]
 			}
 		}
 	}
@@ -152,25 +164,21 @@ func (cluster *Cluster) Tick() {
 	cluster.Bus.Tick()
 	cluster.Network.Tick()
 
-	// for _, client := range cluster.Clients {
-	// 	client.Tick()
-	// }
-
 	for _, replica := range cluster.Replicas {
 		if replica.isAlive(cluster.Ticks) {
 			if !replica.isRunning {
-				replica.restart(cluster)
+				cluster.restart(replica.Config.ReplicaID)
 			}
 
 			replica.Tick()
 
-			// shouldCrash := cluster.Rand.GenBool(cluster.Config.Raft.ReplicaCrashProbability)
-			// if shouldCrash {
-			// 		replica.crash(cluster)
-			// }
+			shouldCrash := cluster.Rand.GenBool(cluster.Config.Raft.ReplicaCrashProbability)
+			if shouldCrash {
+				cluster.crash(replica.Config.ReplicaID)
+			}
 		} else {
 			// Replica is dead, advance its clock to avoid leaving it too far behind other replicas.
-			// replica.Clock.Tick()
+			replica.Clock.Tick()
 		}
 	}
 }

@@ -8,6 +8,28 @@ import (
 	"pgregory.net/rapid"
 )
 
+type Model struct {
+	after uint64
+	ticks uint64
+}
+
+func (model *Model) Tick() {
+	model.ticks++
+}
+
+func (model *Model) Reset() {
+	model.ticks = 0
+}
+
+func (model *Model) ResetAndFireAfter(after uint64) {
+	model.Reset()
+	model.after = after
+}
+
+func newModel(after uint64) *Model {
+	return &Model{after: after, ticks: 0}
+}
+
 func TestTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -16,6 +38,8 @@ func TestTimeout(t *testing.T) {
 		OpReset             = "reset"
 		OpFired             = "fired"
 		OpResetAndFireAfter = "resetAndFireAfter"
+		OpTicks             = "ticks"
+		OpAfter             = "after"
 	)
 
 	rapid.Check(t, func(t *rapid.T) {
@@ -24,29 +48,37 @@ func TestTimeout(t *testing.T) {
 		after := rapid.Uint64Range(0, maxAfter).Draw(t, "after")
 
 		timeout := New(after)
+		model := newModel(after)
 
-		ops := rapid.SliceOf(rapid.SampledFrom([]string{OpTick, OpReset, OpFired})).Draw(t, "ops")
-
-		ticks := uint64(0)
+		ops := rapid.SliceOf(rapid.SampledFrom([]string{OpTick, OpReset, OpFired, OpResetAndFireAfter, OpTicks, OpAfter})).Draw(t, "ops")
 
 		for _, op := range ops {
 			switch op {
 			case OpTick:
 				timeout.Tick()
-				ticks++
+				model.Tick()
+
 			case OpReset:
 				timeout.Reset()
+				model.Reset()
 
 				shouldStartFired := after == 0
 				assert.Equal(t, shouldStartFired, timeout.Fired())
 
-				ticks = 0
-
 			case OpResetAndFireAfter:
 				after = rapid.Uint64Range(0, maxAfter).Draw(t, "newAfter")
 				timeout.ResetAndFireAfter(after)
+				model.ResetAndFireAfter(after)
+
 			case OpFired:
-				assert.Equal(t, ticks >= after, timeout.Fired())
+				assert.Equal(t, model.ticks >= after, timeout.Fired())
+
+			case OpTicks:
+				assert.Equal(t, model.ticks, timeout.Ticks())
+
+			case OpAfter:
+				assert.Equal(t, model.after, timeout.After())
+
 			default:
 				panic(fmt.Sprintf("unknown operation: %s", op))
 			}

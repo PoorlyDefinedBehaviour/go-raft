@@ -25,3 +25,11 @@ func (timeout *T) ResetAndFireAfter(after uint64) {
 func (timeout *T) Fired() bool {
 	return timeout.ticks >= timeout.after
 }
+
+func (timeout *T) Ticks() uint64 {
+	return timeout.ticks
+}
+
+func (timeout *T) After() uint64 {
+	return timeout.after
+}

@@ -42,7 +42,7 @@ type Storage interface {
 	// 1-based indexing. First entry starts at 1. 0 means empty.
 	LastLogTerm() uint64
 
-	Debug()
+	Debug() []types.Entry
 }
 
 type FileStorage struct {
@@ -197,6 +197,6 @@ func (storage *FileStorage) isLogEmpty() bool {
 	return len(storage.entries) == 0
 }
 
-func (storage *FileStorage) Debug() {
-	fmt.Printf("\n\naaaaaaa storage.entries %+v\n\n", storage.entries)
+func (storage *FileStorage) Debug() []types.Entry {
+	return storage.entries
 }
