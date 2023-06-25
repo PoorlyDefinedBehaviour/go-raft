@@ -74,6 +74,7 @@ type Raft struct {
 
 type request struct {
 	requestID     uint64
+	lastIndexSent map[types.ReplicaID]uint64
 	successes     *set.T[types.ReplicaID]
 	failures      *set.T[types.ReplicaID]
 	timeoutAtTick uint64
@@ -105,9 +106,6 @@ type CurrentTermState struct {
 
 	// The candidate this replica voted for in the current term.
 	votedFor uint16
-
-	// The number of votes received in the current election if there's one.
-	votesReceived map[types.ReplicaID]bool
 }
 
 type Config struct {
@@ -170,9 +168,8 @@ func New(
 		mutableState: MutableState{
 			state: Follower,
 			currentTermState: CurrentTermState{
-				term:          0,
-				votedFor:      0,
-				votesReceived: make(map[uint16]bool),
+				term:     0,
+				votedFor: 0,
 			},
 			nextIndex: nil,
 		},
@@ -278,6 +275,7 @@ func newInFlightRequest(requestID uint64, doneCh chan error, timeout uint64) *re
 	return &request{
 		requestID:     requestID,
 		timeoutAtTick: timeout,
+		lastIndexSent: make(map[types.ReplicaID]uint64),
 		successes:     set.New[types.ReplicaID](),
 		failures:      set.New[types.ReplicaID](),
 		// doneCh:        doneCh,
@@ -359,7 +357,7 @@ func (raft *Raft) onLeaderElectionTimeout() ([]OutgoingMessage, error) {
 }
 
 func (raft *Raft) majority() uint16 {
-	return uint16(len(raft.Config.Replicas) / 2)
+	return uint16(len(raft.Config.Replicas)/2) + 1
 }
 
 func (raft *Raft) VotedForCandidateInCurrentTerm(candidateID uint16) bool {
@@ -421,9 +419,8 @@ func withTerm(term uint64) newTermOption {
 
 func (raft *Raft) newTerm(options ...newTermOption) error {
 	newState := CurrentTermState{
-		term:          raft.mutableState.currentTermState.term + 1,
-		votedFor:      0,
-		votesReceived: make(map[uint16]bool),
+		term:     raft.mutableState.currentTermState.term + 1,
+		votedFor: 0,
 	}
 	for _, option := range options {
 		option(&newState)
@@ -465,8 +462,6 @@ func (raft *Raft) voteFor(candidateID types.ReplicaID, candidateTerm uint64) err
 		raft.debug("VOTE=self")
 
 		assert.True(raft.State() == Candidate, "must be a candidate to vote for itself")
-
-		raft.mutableState.currentTermState.votesReceived[raft.Config.ReplicaID] = true
 	}
 
 	return nil
@@ -481,8 +476,6 @@ func (raft *Raft) Term() uint64 {
 }
 
 func (raft *Raft) transitionToState(state State) error {
-	// TODO: do we need to store state in the stable storage? probably not
-	// because the replica starts as follower.
 	if raft.mutableState.state == state {
 		return nil
 	}
@@ -505,6 +498,8 @@ func (raft *Raft) transitionToState(state State) error {
 		if err := raft.Storage.AppendEntries([]types.Entry{entry}); err != nil {
 			return fmt.Errorf("append empty entry after becoming leader: %w", err)
 		}
+
+		entry.Index = raft.Storage.LastLogIndex()
 
 		raft.mutableState.nextIndex = newNextIndex(raft.Config.Replicas, nextIndex)
 	case Candidate:
@@ -598,16 +593,17 @@ func (raft *Raft) onAppendEntriesInput(message *types.AppendEntriesInput) (Outgo
 		len(message.Entries),
 	)
 
+	outMessage := &types.AppendEntriesOutput{
+		MessageID:        message.ID(),
+		ReplicaID:        raft.Config.ReplicaID,
+		CurrentTerm:      raft.mutableState.currentTermState.term,
+		Success:          false,
+		PreviousLogIndex: raft.Storage.LastLogIndex(),
+		PreviousLogTerm:  raft.Storage.LastLogTerm(),
+	}
 	outgoingMessage := OutgoingMessage{
-		To: message.LeaderID,
-		Message: &types.AppendEntriesOutput{
-			MessageID:        message.ID(),
-			ReplicaID:        raft.Config.ReplicaID,
-			CurrentTerm:      raft.mutableState.currentTermState.term,
-			Success:          false,
-			PreviousLogIndex: raft.Storage.LastLogIndex(),
-			PreviousLogTerm:  raft.Storage.LastLogTerm(),
-		},
+		To:      message.LeaderID,
+		Message: outMessage,
 	}
 
 	if message.LeaderTerm < raft.mutableState.currentTermState.term {
@@ -686,17 +682,10 @@ func (raft *Raft) onAppendEntriesInput(message *types.AppendEntriesInput) (Outgo
 
 	raft.mutableState.currentTermState.term = message.LeaderTerm
 
-	return OutgoingMessage{
-		To: message.LeaderID,
-		Message: &types.AppendEntriesOutput{
-			MessageID:        message.ID(),
-			ReplicaID:        raft.Config.ReplicaID,
-			CurrentTerm:      raft.mutableState.currentTermState.term,
-			Success:          true,
-			PreviousLogIndex: raft.Storage.LastLogIndex(),
-			PreviousLogTerm:  raft.Storage.LastLogTerm(),
-		},
-	}, nil
+	outMessage.Success = true
+	outMessage.CurrentTerm = raft.mutableState.currentTermState.term
+
+	return outgoingMessage, nil
 }
 
 func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) error {
@@ -748,7 +737,10 @@ func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) erro
 	if req.successes.Size() == int(raft.majority())-1 {
 		raft.requests.Remove(req)
 		// TODO: commit
-		// TODO: advance nextIndex
+
+		if index, ok := req.lastIndexSent[message.ReplicaID]; ok {
+			raft.mutableState.nextIndex[message.ReplicaID] = index + 1
+		}
 	} else if req.failures.Size() == int(raft.majority())-1 {
 		raft.requests.Remove(req)
 
@@ -838,7 +830,13 @@ func (raft *Raft) onRequestVoteInput(message *types.RequestVoteInput) (OutgoingM
 func (raft *Raft) onRequestVoteOutput(message *types.RequestVoteOutput) ([]OutgoingMessage, error) {
 	raft.debug("RequestVoteOutput REPLICA=%d REPLICA_TERM=%d VOTE_GRANTED=%t ", message.ReplicaID, message.CurrentTerm, message.VoteGranted)
 
+	if message.CurrentTerm < raft.mutableState.currentTermState.term {
+		raft.debug("RequestVoteOutput DROP STALE MESSAGE TERM=%d REPLICA=%d", message.CurrentTerm, message.ReplicaID)
+		return nil, nil
+	}
+
 	if message.CurrentTerm > raft.mutableState.currentTermState.term {
+		raft.debug("RequestVoteOutput found replica with higher term TERM=%d REPLICA=%d", message.CurrentTerm, message.ReplicaID)
 		if err := raft.newTerm(withTerm(message.CurrentTerm)); err != nil {
 			return nil, fmt.Errorf("starting new term: %w", err)
 		}
@@ -848,24 +846,37 @@ func (raft *Raft) onRequestVoteOutput(message *types.RequestVoteOutput) ([]Outgo
 		return nil, nil
 	}
 
-	// TODO: use ra
 	req, found := raft.requests.Find(func(req **request) bool { return (*req).requestID == message.MessageID })
 	if !found {
 		raft.debug("RequestVoteOutput received response for timed out request, ignoring")
 		return nil, nil
 	}
-	// TODO: replace currentTermState.votesReceived with raft.requests
 
-	if raft.hasReceivedVote(message) {
-		raft.mutableState.currentTermState.votesReceived[message.ReplicaID] = true
+	assert.True(message.CurrentTerm == raft.mutableState.currentTermState.term, "should only count messages received for the current election")
 
-		if raft.votesReceived() >= raft.majority()-1 {
-			outgoingMessages, err := raft.becomeLeader()
-			if err != nil {
-				return outgoingMessages, fmt.Errorf("becoming leader: %w", err)
-			}
-			return outgoingMessages, nil
+	if message.VoteGranted {
+		raft.debug("RequestVoteOutput received vote REPLICA=%d", message.ReplicaID)
+		req.successes.Insert(message.ReplicaID)
+	} else {
+		raft.debug("RequestVoteOutput did not receive vote REPLICA=%d", message.ReplicaID)
+		req.failures.Insert(message.ReplicaID)
+	}
+
+	// -1 because the replica votes for itself.
+	if req.successes.Size() == int(raft.majority())-1 {
+		raft.debug("RequestVoteOutput got majority votes, becoming leader")
+		outgoingMessages, err := raft.becomeLeader()
+		if err != nil {
+			raft.debug("RequestVoteOutput did not vote REPLICA=%d", message.ReplicaID)
+			return outgoingMessages, fmt.Errorf("becoming leader: %w", err)
 		}
+		return outgoingMessages, nil
+	}
+
+	// -1 because the replica is in the list of replicas.
+	if req.responses() == len(raft.Config.Replicas)-1 {
+		raft.debug("RequestVoteOutput removing request from request queue")
+		_ = raft.requests.Remove(req)
 	}
 
 	return nil, nil
@@ -883,15 +894,6 @@ func (raft *Raft) becomeLeader() ([]OutgoingMessage, error) {
 	}
 
 	return outgoingMessages, nil
-}
-
-func (raft *Raft) votesReceived() uint16 {
-	return uint16(len(raft.mutableState.currentTermState.votesReceived))
-}
-
-func (raft *Raft) hasReceivedVote(message *types.RequestVoteOutput) bool {
-	return message.VoteGranted && message.CurrentTerm == raft.mutableState.currentTermState.term &&
-		!raft.mutableState.currentTermState.votesReceived[message.ReplicaID]
 }
 
 func (raft *Raft) getNextBatchForReplica(replicaID types.ReplicaID) ([]types.Entry, error) {
@@ -958,6 +960,10 @@ func (raft *Raft) sendHeartbeat() ([]OutgoingMessage, error) {
 		}
 
 		raft.debug("REPLICA=%d ENTRIES=%d PREVIOUS_LOG_INDEX=%d PREVIOUS_LOG_TERM=%d", replica, len(entries), previousLogIndex, previousLogTerm)
+
+		if len(entries) > 0 {
+			request.lastIndexSent[replica] = entries[len(entries)-1].Index
+		}
 
 		messages = append(messages, OutgoingMessage{
 			To: replica,

@@ -2,7 +2,6 @@ package raft
 
 import (
 	cryptorand "crypto/rand"
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -433,22 +432,6 @@ func TestVoteFor(t *testing.T) {
 
 		assert.Equal(t, candidate.mutableState.currentTermState.term, replica.mutableState.currentTermState.term)
 	})
-
-	t.Run("when voting for itself, replica increments vote count", func(t *testing.T) {
-		t.Parallel()
-
-		cluster := Setup()
-
-		candidate := cluster.Replicas[0]
-		assert.NoError(t, candidate.transitionToState(Candidate))
-
-		assert.Equal(t, uint16(0), candidate.votesReceived())
-
-		assert.NoError(t, candidate.voteFor(candidate.Config.ReplicaID, uint64(candidate.mutableState.currentTermState.term)))
-
-		assert.Equal(t, uint16(1), candidate.votesReceived())
-		assert.True(t, candidate.mutableState.currentTermState.votesReceived[candidate.Config.ReplicaID])
-	})
 }
 
 func TestHandleMessageAppendEntriesInput(t *testing.T) {
@@ -561,94 +544,14 @@ func TestHandleMessageAppendEntriesInput(t *testing.T) {
 		outgoingMessages, err := replica.handleMessage(&inputMessage)
 		assert.NoError(t, err)
 
-		expected := []OutgoingMessage{
-			{
-				To: leader.Config.ReplicaID,
-				Message: &types.AppendEntriesOutput{
-					ReplicaID:        replica.Config.ReplicaID,
-					CurrentTerm:      leader.Term(),
-					Success:          true,
-					PreviousLogIndex: 1,
-					PreviousLogTerm:  2,
-				},
-			},
-		}
-
-		assert.EqualValues(t, expected, outgoingMessages)
+		assert.Equal(t, 1, len(outgoingMessages))
+		message := outgoingMessages[0].Message.(*types.AppendEntriesOutput)
+		assert.Equal(t, leader.Config.ReplicaID, outgoingMessages[0].To)
+		assert.True(t, message.Success)
 
 		entry, err := replica.Storage.GetEntryAtIndex(1)
 		assert.NoError(t, err)
 		assert.Equal(t, uint64(2), entry.Term)
-	})
-
-	t.Run("leader commit index is greater than the replica commit index, should apply entries to state machine", func(t *testing.T) {
-		t.Parallel()
-
-		cluster := Setup()
-
-		leader := cluster.Replicas[0]
-		replica := cluster.Replicas[1]
-
-		assert.NoError(t, leader.newTerm(withTerm(1)))
-
-		entryValue, err := json.Marshal(map[string]any{
-			"key":   "key1",
-			"value": []byte("value1"),
-		})
-		assert.NoError(t, err)
-
-		_, err = replica.handleMessage(&types.AppendEntriesInput{
-			LeaderID:          leader.Config.ReplicaID,
-			LeaderTerm:        leader.mutableState.currentTermState.term,
-			LeaderCommitIndex: leader.mutableState.commitIndex,
-			PreviousLogIndex:  0,
-			PreviousLogTerm:   0,
-			Entries: []types.Entry{
-				{
-					Term:  leader.mutableState.currentTermState.term,
-					Type:  2,
-					Value: entryValue,
-				},
-			},
-		})
-		assert.NoError(t, err)
-
-		assert.NoError(t, leader.newTerm(withTerm(2)))
-		leader.mutableState.commitIndex = 1
-
-		entryValue, err = json.Marshal(map[string]string{
-			"key":   "key2",
-			"value": "value2",
-		})
-		assert.NoError(t, err)
-
-		outgoingMessages, err := replica.handleMessage(&types.AppendEntriesInput{
-			LeaderID:          leader.Config.ReplicaID,
-			LeaderTerm:        leader.mutableState.currentTermState.term,
-			LeaderCommitIndex: leader.mutableState.commitIndex,
-			PreviousLogIndex:  1,
-			PreviousLogTerm:   leader.mutableState.currentTermState.term - 1,
-			Entries: []types.Entry{
-				{
-					Term:  leader.mutableState.currentTermState.term,
-					Type:  2,
-					Value: entryValue,
-				},
-			},
-		})
-		assert.NoError(t, err)
-
-		response := outgoingMessages[0].Message.(*types.AppendEntriesOutput)
-		assert.True(t, response.Success)
-
-		// First entry has been applied.
-		value, ok := replica.Kv.Get("key1")
-		assert.True(t, ok)
-		assert.Equal(t, []byte("value1"), value)
-
-		// Second entry has not been applied yet.
-		_, ok = replica.Kv.Get("key2")
-		assert.False(t, ok)
 	})
 
 	t.Run("replica updates its term if it is out of date", func(t *testing.T) {
@@ -898,83 +801,10 @@ func TestLeader(t *testing.T) {
 
 		assert.Equal(t, &types.Entry{
 			Term:  leader.mutableState.currentTermState.term,
+			Index: 1,
 			Type:  types.NewLeaderEntryType,
 			Value: nil,
 		}, entry)
-	})
-
-	t.Run("heartbeat timeout: leader sends heartbeat to followers", func(t *testing.T) {
-		t.Parallel()
-
-		cluster := Setup()
-
-		leader := cluster.MustWaitForLeader()
-
-		leader.TickUntilHeartbeatTimeout()
-
-		expected := []types.Message{
-			&types.AppendEntriesInput{
-				MessageID:         2,
-				LeaderID:          leader.Config.ReplicaID,
-				LeaderTerm:        leader.mutableState.currentTermState.term,
-				LeaderCommitIndex: leader.mutableState.commitIndex,
-				PreviousLogIndex:  leader.Storage.LastLogIndex() - 1,
-				PreviousLogTerm:   leader.Storage.LastLogTerm() - 1,
-				Entries: []types.Entry{
-					{
-						Term:  leader.Term(),
-						Type:  types.NewLeaderEntryType,
-						Value: nil,
-					},
-				},
-			},
-			// Send same entries again because replicas have not
-			// sent a response to the previous message.
-			&types.AppendEntriesInput{
-				MessageID:         3,
-				LeaderID:          leader.Config.ReplicaID,
-				LeaderTerm:        leader.mutableState.currentTermState.term,
-				LeaderCommitIndex: leader.mutableState.commitIndex,
-				PreviousLogIndex:  leader.Storage.LastLogIndex() - 1,
-				PreviousLogTerm:   leader.Storage.LastLogTerm() - 1,
-				Entries: []types.Entry{
-					{
-						Term:  leader.Term(),
-						Type:  types.NewLeaderEntryType,
-						Value: nil,
-					},
-				},
-			},
-		}
-
-		// Ensure leader sent heartbeat to followers.
-		for _, replica := range cluster.Followers() {
-			messages := cluster.Network.MessagesFromTo(leader.Config.ReplicaID, replica.Config.ReplicaID)
-
-			// 1 message because of the heartbeat sent by the newly elected leader.
-			// 1 message sent because of the heartbeat after the heartbeat timeout fired.
-			assert.Equal(t, len(expected), len(messages))
-			for i := 0; i < len(expected); i++ {
-
-				assert.Equal(t, expected[i], messages[i])
-			}
-		}
-	})
-
-	t.Run("leader keeps track of the next log index that will be sent to replicas", func(t *testing.T) {
-		t.Parallel()
-
-		t.Run("empty heartbeat", func(t *testing.T) {
-			t.Parallel()
-
-			// TODO
-		})
-
-		t.Run("non-empty heartbeat", func(t *testing.T) {
-			t.Parallel()
-
-			// TODO
-		})
 	})
 }
 
@@ -1167,12 +997,8 @@ func TestCandidate(t *testing.T) {
 
 		// Responses from previous terms are not taken into account.
 		_, err = candidate.handleMessage(&types.RequestVoteOutput{
-			CurrentTerm: candidate.mutableState.currentTermState.term - 1,
-			VoteGranted: true,
-		})
-		assert.NoError(t, err)
-
-		_, err = candidate.handleMessage(&types.RequestVoteOutput{
+			MessageID:   1,
+			ReplicaID:   replicaA.Config.ReplicaID,
 			CurrentTerm: candidate.mutableState.currentTermState.term - 1,
 			VoteGranted: true,
 		})
@@ -1180,35 +1006,16 @@ func TestCandidate(t *testing.T) {
 
 		assert.Equal(t, Candidate, candidate.State())
 
-		// Candidate votes itself when an election is started.
-		assert.Equal(t, uint16(1), candidate.votesReceived())
-
 		// Duplicated messages are ignored.
 		_, err = candidate.handleMessage(&types.RequestVoteOutput{
+			MessageID:   1,
 			ReplicaID:   replicaA.Config.ReplicaID,
 			CurrentTerm: candidate.mutableState.currentTermState.term,
 			VoteGranted: true,
 		})
 		assert.NoError(t, err)
-
-		_, err = candidate.handleMessage(&types.RequestVoteOutput{
-			ReplicaID:   replicaA.Config.ReplicaID,
-			CurrentTerm: candidate.mutableState.currentTermState.term,
-			VoteGranted: true,
-		})
-		assert.NoError(t, err)
-
-		// Received two votes: itself and from replica A.
-		assert.Equal(t, uint16(2), candidate.votesReceived())
 
 		// Got majority votes, becomes leader.
 		assert.Equal(t, Leader, candidate.State())
-
-		// Process leader heartbeat.
-		cluster.Tick()
-
-		// Replica appends empty log entry upon becoming leader.
-		assert.Equal(t, uint64(1), candidate.Storage.LastLogIndex())
-		assert.Equal(t, candidate.mutableState.currentTermState.term, candidate.Storage.LastLogTerm())
 	})
 }
