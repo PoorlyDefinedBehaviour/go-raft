@@ -39,6 +39,7 @@ type AppendEntriesInput struct {
 
 type Entry struct {
 	Term  uint64
+	Index uint64
 	Type  uint8
 	Value []byte
 }
