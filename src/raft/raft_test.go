@@ -867,6 +867,22 @@ func TestHandleMessageRequestVoteInput(t *testing.T) {
 	})
 }
 
+func TestHandleAppendEntriesOutput(t *testing.T) {
+	t.Parallel()
+
+	t.Run("leader sends message to replica; replica replies with a greater term; leader becomes follower", func(t *testing.T) {
+		t.Parallel()
+
+		// TODO
+	})
+
+	t.Run("leader advances next inded for replica after a successful append entries request", func(t *testing.T) {
+		t.Parallel()
+
+		// TODO
+	})
+}
+
 func TestLeader(t *testing.T) {
 	t.Parallel()
 

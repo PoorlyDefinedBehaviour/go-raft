@@ -7,6 +7,7 @@ import (
 
 	"github.com/poorlydefinedbehaviour/raft-go/src/assert"
 	"github.com/poorlydefinedbehaviour/raft-go/src/clock"
+	"github.com/poorlydefinedbehaviour/raft-go/src/cmpx"
 	"github.com/poorlydefinedbehaviour/raft-go/src/constants"
 	messagebus "github.com/poorlydefinedbehaviour/raft-go/src/message_bus"
 	"github.com/poorlydefinedbehaviour/raft-go/src/rand"
@@ -76,7 +77,13 @@ type request struct {
 	successes     *set.T[types.ReplicaID]
 	failures      *set.T[types.ReplicaID]
 	timeoutAtTick uint64
+	// Null when request is an empty heartbeat.
+	minLogIndexSentToAllReplicas *uint64
 	// doneCh        chan error
+}
+
+func (request *request) responses() int {
+	return request.successes.Size() + request.failures.Size()
 }
 
 type MutableState struct {
@@ -706,12 +713,23 @@ func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) erro
 		return nil
 	}
 
+	// TODO: should it be > or >=?
+	if message.CurrentTerm > raft.mutableState.currentTermState.term {
+		raft.debug("AppendEntriesOutput FOUND HIGHER TERM=%d", message.CurrentTerm)
+		if err := raft.newTerm(withTerm(message.CurrentTerm)); err != nil {
+			return fmt.Errorf("starting new term: %w", err)
+		}
+		if err := raft.transitionToState(Follower); err != nil {
+			return fmt.Errorf("transitioning to follower: %w", err)
+		}
+		return nil
+	}
+
 	req, found := raft.requests.Find(func(request **request) bool { return (*request).requestID == message.MessageID })
 	if !found {
 		raft.debug("message not found in queue ID=%d REPLICA=%d", message.MessageID, message.ReplicaID)
 		return nil
 	}
-	defer raft.requests.Remove(req)
 
 	if req.successes.Contains(message.ReplicaID) || req.failures.Contains(message.ReplicaID) {
 		raft.debug("duplicated message, ignore ID=%d REPLICA=%d", message.MessageID, message.ReplicaID)
@@ -721,20 +739,24 @@ func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) erro
 	if message.Success {
 		raft.debug("success=true append entries response ID=%d REPLICA=%d", message.MessageID, message.ReplicaID)
 		req.successes.Insert(message.ReplicaID)
+		// TODO: advance next index
 	} else {
 		raft.debug("success=false append entries response ID=%d REPLICA=%d", message.MessageID, message.ReplicaID)
 		req.failures.Insert(message.ReplicaID)
 	}
 
-	// var doneChErr error
-
 	if req.successes.Size() == int(raft.majority())-1 {
-		// doneChErr = nil
-		raft.debug("handleMessages: send nil to done channel")
+		raft.requests.Remove(req)
+		// TODO: commit
+		// TODO: advance nextIndex
 	} else if req.failures.Size() == int(raft.majority())-1 {
-		raft.debug("handleMessages: send ErrNoQuorum to done channel")
-		// doneChErr = ErrNoQuorum
+		raft.requests.Remove(req)
 
+	}
+
+	// Received response from every replica.
+	if req.responses() == len(raft.Config.Replicas)-1 {
+		raft.requests.Remove(req)
 	}
 
 	// if req.doneCh != nil {
@@ -826,6 +848,14 @@ func (raft *Raft) onRequestVoteOutput(message *types.RequestVoteOutput) ([]Outgo
 		return nil, nil
 	}
 
+	// TODO: use ra
+	req, found := raft.requests.Find(func(req **request) bool { return (*req).requestID == message.MessageID })
+	if !found {
+		raft.debug("RequestVoteOutput received response for timed out request, ignoring")
+		return nil, nil
+	}
+	// TODO: replace currentTermState.votesReceived with raft.requests
+
 	if raft.hasReceivedVote(message) {
 		raft.mutableState.currentTermState.votesReceived[message.ReplicaID] = true
 
@@ -882,14 +912,16 @@ func (raft *Raft) getNextBatchForReplica(replicaID types.ReplicaID) ([]types.Ent
 func (raft *Raft) sendHeartbeat() ([]OutgoingMessage, error) {
 	raft.debug("heartbeat in flight")
 
-	request := newInFlightRequest(raft.newRequestID(), nil, raft.Clock.CurrentTick()+100)
-
 	if raft.requests.Size() >= int(raft.Config.MaxInFlightRequests) {
 		return nil, fmt.Errorf("request queue is full")
 	}
+
+	request := newInFlightRequest(raft.newRequestID(), nil, raft.Clock.CurrentTick()+100)
 	raft.requests.Insert(request)
 
 	messages := make([]OutgoingMessage, 0, len(raft.Config.Replicas)-1)
+
+	var minLogIndexSentToAllReplicas *uint64 = nil
 
 	for _, replica := range raft.Config.Replicas {
 		if replica == raft.Config.ReplicaID {
@@ -899,6 +931,14 @@ func (raft *Raft) sendHeartbeat() ([]OutgoingMessage, error) {
 		entries, err := raft.getNextBatchForReplica(replica)
 		if err != nil {
 			return nil, fmt.Errorf("fetching batch for replica: replicaID=%d %w", replica, err)
+		}
+		if len(entries) > 0 {
+			lastEntry := entries[len(entries)-1]
+			if minLogIndexSentToAllReplicas == nil {
+				minLogIndexSentToAllReplicas = &lastEntry.Index
+			} else {
+				*minLogIndexSentToAllReplicas = cmpx.Min(*minLogIndexSentToAllReplicas, lastEntry.Index)
+			}
 		}
 
 		var previousLogIndex uint64 = 0
@@ -931,21 +971,10 @@ func (raft *Raft) sendHeartbeat() ([]OutgoingMessage, error) {
 				Entries:           entries,
 			},
 		})
-
-		// raft.bus.Send(raft.Config.ReplicaID, replica.ReplicaAddress, input)
-
-		// TODO: shouldn't advance next index if request does not succeed
-		// raft.mutableState.nextIndex[replica] += uint64(len(entries))
 	}
 
-	// minIndexReplicatedInMajority, _ := mapx.MinValue(raft.mutableState.nextIndex)
-
-	// if *minIndexReplicatedInMajority > raft.mutableState.commitIndex {
-	// 	if err := raft.applyCommittedEntries(*minIndexReplicatedInMajority, raft.storage.LastLogIndex()); err != nil {
-	// 		return fmt.Errorf("applying committed entries: %w", err)
-	// 	}
-	// 	raft.mutableState.commitIndex = *minIndexReplicatedInMajority
-	// }
+	// Will commit up to this index after replicating on majority.
+	request.minLogIndexSentToAllReplicas = minLogIndexSentToAllReplicas
 
 	raft.debug("sent heartbeat, reset heartbeat timeout")
 	raft.heartbeatTimeout.Reset()
