@@ -8,7 +8,7 @@ import (
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
 )
 
-const SetCommand uint8 = 2
+const SetCommand uint8 = 11
 
 type setCommandEntry struct {
 	Key   string `json:"key"`
@@ -20,33 +20,28 @@ type KvStore struct {
 	bus   *messagebus.MessageBus
 }
 
-func NewKvStore(bus *messagebus.MessageBus) *KvStore {
+func New(bus *messagebus.MessageBus) *KvStore {
 	return &KvStore{items: make(map[string][]byte), bus: bus}
 }
 
-func (kv *KvStore) Set(key string, value []byte) error {
+func (kv *KvStore) Set(key string, value []byte) (chan error, error) {
 	bytes, err := json.Marshal(map[string]any{
 		"key":   key,
 		"value": value,
 	})
 	if err != nil {
-		return fmt.Errorf("marshaling key value pair: %w", err)
+		return nil, fmt.Errorf("marshaling key value pair: %w", err)
 	}
 
-	request := types.UserRequestInput{
+	request := &types.UserRequestInput{
 		Type:   SetCommand,
 		Value:  bytes,
-		DoneCh: make(chan error),
-	}
-	panic("TODO")
-	// kv.bus.QueueUserRequest("TODO", &request)
-	defer close(request.DoneCh)
-
-	if err := <-request.DoneCh; err != nil {
-		return fmt.Errorf("setting key value pair: %w", err)
+		DoneCh: make(chan error, 1),
 	}
 
-	return nil
+	kv.bus.ClientRequest(request)
+
+	return request.DoneCh, nil
 }
 
 func (kv *KvStore) Apply(entry *types.Entry) error {

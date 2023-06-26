@@ -2,8 +2,9 @@ package types
 
 // Type used by raft empty heartbeat entries.
 const (
-	HeartbeatEntryType = 1
-	NewLeaderEntryType = 2
+	HeartbeatEntryType   = 1
+	NewLeaderEntryType   = 2
+	MaxReservedEntryType = 10
 )
 
 type MessageCallback = func(ReplicaID, Message)
@@ -48,8 +49,8 @@ func (message *AppendEntriesInput) ID() uint64 {
 	return message.MessageID
 }
 
-func (entry *Entry) IsHeartbeatEntry() bool {
-	return entry.Type == HeartbeatEntryType
+func (entry *Entry) IsSystemEntry() bool {
+	return entry.Type == NewLeaderEntryType || entry.Type == HeartbeatEntryType
 }
 
 type AppendEntriesOutput struct {

@@ -19,7 +19,10 @@ import (
 
 const appendEntriesBatchSize = 100
 
-var ErrNoQuorum = errors.New("did not get successful response from majority")
+var (
+	ErrNoQuorum = errors.New("did not get successful response from majority")
+	ErrTimeout  = errors.New("timed out")
+)
 
 type State struct{ value uint8 }
 
@@ -46,7 +49,7 @@ type Raft struct {
 	Config Config
 
 	// Used to send inputs to other replicas.
-	bus *messagebus.MessageBus
+	Bus *messagebus.MessageBus
 
 	// The state machine being built on top of raft.
 	stateMachine types.StateMachine
@@ -79,8 +82,8 @@ type request struct {
 	failures      *set.T[types.ReplicaID]
 	timeoutAtTick uint64
 	// Null when request is an empty heartbeat.
-	minLogIndexSentToAllReplicas *uint64
-	// doneCh        chan error
+	minLogIndexSentToAllReplicas uint64
+	doneCh                       chan error
 }
 
 func (request *request) responses() int {
@@ -161,7 +164,7 @@ func New(
 
 	raft := &Raft{
 		Config:       config,
-		bus:          bus,
+		Bus:          bus,
 		Storage:      storage,
 		stateMachine: stateMachine,
 		rand:         rand,
@@ -278,7 +281,7 @@ func newInFlightRequest(requestID uint64, doneCh chan error, timeout uint64) *re
 		lastIndexSent: make(map[types.ReplicaID]uint64),
 		successes:     set.New[types.ReplicaID](),
 		failures:      set.New[types.ReplicaID](),
-		// doneCh:        doneCh,
+		doneCh:        doneCh,
 	}
 }
 
@@ -288,7 +291,12 @@ func (raft *Raft) Tick() {
 	raft.leaderElectionTimeout.Tick()
 
 	raft.requests.Retain(func(request **request) bool {
-		return (*request).timeoutAtTick > raft.Clock.CurrentTick()
+		timedOut := (*request).timeoutAtTick <= raft.Clock.CurrentTick()
+		if timedOut && (*request).doneCh != nil {
+			(*request).doneCh <- ErrTimeout
+			close((*request).doneCh)
+		}
+		return !timedOut
 	})
 
 	if raft.heartbeatTimeout.Fired() {
@@ -298,7 +306,7 @@ func (raft *Raft) Tick() {
 			return
 		}
 		for _, message := range outgoingMessages {
-			raft.bus.Send(raft.Config.ReplicaID, message.To, message.Message)
+			raft.Bus.Send(raft.Config.ReplicaID, message.To, message.Message)
 		}
 	}
 	if raft.leaderElectionTimeout.Fired() {
@@ -308,7 +316,7 @@ func (raft *Raft) Tick() {
 			return
 		}
 		for _, message := range outgoingMessages {
-			raft.bus.Send(raft.Config.ReplicaID, message.To, message.Message)
+			raft.Bus.Send(raft.Config.ReplicaID, message.To, message.Message)
 		}
 	}
 }
@@ -322,7 +330,7 @@ func (raft *Raft) onHeartbeatTimeout() ([]OutgoingMessage, error) {
 	}
 
 	raft.debug("heartbeat timeout fired, sending heartbeat")
-	outgoingMessages, err := raft.sendHeartbeat()
+	outgoingMessages, err := raft.sendHeartbeat(nil)
 	if err != nil {
 		return outgoingMessages, fmt.Errorf("generating heartbeat messages: %w", err)
 	}
@@ -526,13 +534,11 @@ func (raft *Raft) OnMessage(from types.ReplicaID, message types.Message) {
 	}
 
 	for _, message := range outgoingMessages {
-		raft.bus.Send(raft.Config.ReplicaID, message.To, message.Message)
+		raft.Bus.Send(raft.Config.ReplicaID, message.To, message.Message)
 	}
 }
 
 func (raft *Raft) handleMessage(message types.Message) ([]OutgoingMessage, error) {
-	// TODO: ensure term is updated to max(message.term, replica.term)
-
 	switch message := message.(type) {
 	case *types.UserRequestInput:
 		return raft.onUserRequestInput(message)
@@ -561,9 +567,19 @@ func (raft *Raft) handleMessage(message types.Message) ([]OutgoingMessage, error
 }
 
 func (raft *Raft) onUserRequestInput(message *types.UserRequestInput) ([]OutgoingMessage, error) {
-	assert.True(raft.State() == Leader, "must be leader to handle user request")
+	raft.debug("user request received")
 
-	raft.debug("user request in received")
+	if message.Type <= types.MaxReservedEntryType {
+		return nil, fmt.Errorf("entry types less than %d are reserved", types.MaxReservedEntryType)
+	}
+
+	if raft.State() != Leader {
+		return nil, fmt.Errorf("replica is not leader and doesn't know who the leader is")
+	}
+
+	if raft.requests.Size() >= int(raft.Config.MaxInFlightRequests) {
+		return nil, fmt.Errorf("request queue is full")
+	}
 
 	raft.debug("leader: append user request entries to log")
 	entries := []types.Entry{{
@@ -575,7 +591,7 @@ func (raft *Raft) onUserRequestInput(message *types.UserRequestInput) ([]Outgoin
 		return nil, fmt.Errorf("appending entries to log: entries=%+v %w", entries, err)
 	}
 	raft.debug("NEW ENTRIES. SENDING HEARTBEAT")
-	outgoingMessages, err := raft.sendHeartbeat()
+	outgoingMessages, err := raft.sendHeartbeat(message.DoneCh)
 	if err != nil {
 		return outgoingMessages, fmt.Errorf("handling user request input: sending new entries heartbeat: %w", err)
 	}
@@ -680,8 +696,6 @@ func (raft *Raft) onAppendEntriesInput(message *types.AppendEntriesInput) (Outgo
 		}
 	}
 
-	raft.mutableState.currentTermState.term = message.LeaderTerm
-
 	outMessage.Success = true
 	outMessage.CurrentTerm = raft.mutableState.currentTermState.term
 
@@ -702,7 +716,6 @@ func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) erro
 		return nil
 	}
 
-	// TODO: should it be > or >=?
 	if message.CurrentTerm > raft.mutableState.currentTermState.term {
 		raft.debug("AppendEntriesOutput FOUND HIGHER TERM=%d", message.CurrentTerm)
 		if err := raft.newTerm(withTerm(message.CurrentTerm)); err != nil {
@@ -728,7 +741,10 @@ func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) erro
 	if message.Success {
 		raft.debug("success=true append entries response ID=%d REPLICA=%d", message.MessageID, message.ReplicaID)
 		req.successes.Insert(message.ReplicaID)
-		// TODO: advance next index
+
+		if index, ok := req.lastIndexSent[message.ReplicaID]; ok {
+			raft.mutableState.nextIndex[message.ReplicaID] = index + 1
+		}
 	} else {
 		raft.debug("success=false append entries response ID=%d REPLICA=%d", message.MessageID, message.ReplicaID)
 		req.failures.Insert(message.ReplicaID)
@@ -736,14 +752,25 @@ func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) erro
 
 	if req.successes.Size() == int(raft.majority())-1 {
 		raft.requests.Remove(req)
-		// TODO: commit
 
-		if index, ok := req.lastIndexSent[message.ReplicaID]; ok {
-			raft.mutableState.nextIndex[message.ReplicaID] = index + 1
+		raft.debug("AppendEntriesOutput got majority, will commit INDEX=%d", req.minLogIndexSentToAllReplicas)
+		if err := raft.commit(req.minLogIndexSentToAllReplicas); err != nil {
+			return fmt.Errorf("error committing entries")
+		}
+
+		if req.doneCh != nil {
+			raft.debug("sending nil error to done channel")
+			req.doneCh <- nil
+			close(req.doneCh)
 		}
 	} else if req.failures.Size() == int(raft.majority())-1 {
 		raft.requests.Remove(req)
 
+		if req.doneCh != nil {
+			raft.debug("sending ErrNoQuorum error to done channel")
+			req.doneCh <- ErrNoQuorum
+			close(req.doneCh)
+		}
 	}
 
 	// Received response from every replica.
@@ -767,10 +794,6 @@ func (raft *Raft) onRequestVoteInput(message *types.RequestVoteInput) (OutgoingM
 		message.CandidateLastLogTerm,
 	)
 
-	// Receiver implementation:
-	// 1. Reply false if term < currentTerm (§5.1)
-	// 2. If votedFor is null or candidateId, and candidate’s log is at
-	// least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
 	if message.CandidateTerm < raft.mutableState.currentTermState.term {
 		raft.debug("RequestVoteInput andidateTerm=%d replicaTerm=%d candidate term is less than replica term, not granting vote", message.CandidateTerm, raft.mutableState.currentTermState.term)
 		return OutgoingMessage{
@@ -815,8 +838,6 @@ func (raft *Raft) onRequestVoteInput(message *types.RequestVoteInput) (OutgoingM
 		}
 	}
 
-	// TODO max(term)
-
 	return OutgoingMessage{
 		To: message.CandidateID,
 		Message: &types.RequestVoteOutput{
@@ -835,6 +856,8 @@ func (raft *Raft) onRequestVoteOutput(message *types.RequestVoteOutput) ([]Outgo
 		return nil, nil
 	}
 
+	req, reqFound := raft.requests.Find(func(req **request) bool { return (*req).requestID == message.MessageID })
+
 	if message.CurrentTerm > raft.mutableState.currentTermState.term {
 		raft.debug("RequestVoteOutput found replica with higher term TERM=%d REPLICA=%d", message.CurrentTerm, message.ReplicaID)
 		if err := raft.newTerm(withTerm(message.CurrentTerm)); err != nil {
@@ -843,11 +866,13 @@ func (raft *Raft) onRequestVoteOutput(message *types.RequestVoteOutput) ([]Outgo
 		if err := raft.transitionToState(Follower); err != nil {
 			return nil, fmt.Errorf("transitioning to follower: %w", err)
 		}
+		if reqFound {
+			_ = raft.requests.Remove(req)
+		}
 		return nil, nil
 	}
 
-	req, found := raft.requests.Find(func(req **request) bool { return (*req).requestID == message.MessageID })
-	if !found {
+	if !reqFound {
 		raft.debug("RequestVoteOutput received response for timed out request, ignoring")
 		return nil, nil
 	}
@@ -888,7 +913,7 @@ func (raft *Raft) becomeLeader() ([]OutgoingMessage, error) {
 	}
 	// Send empty heartbeat to avoid the other replicas election timeouts.
 	raft.debug("NEW LEADER. SENDING HEARTBEAT")
-	outgoingMessages, err := raft.sendHeartbeat()
+	outgoingMessages, err := raft.sendHeartbeat(nil)
 	if err != nil {
 		return outgoingMessages, fmt.Errorf("new leader: generating heartbeats: %w", err)
 	}
@@ -911,19 +936,19 @@ func (raft *Raft) getNextBatchForReplica(replicaID types.ReplicaID) ([]types.Ent
 	return entries, nil
 }
 
-func (raft *Raft) sendHeartbeat() ([]OutgoingMessage, error) {
+func (raft *Raft) sendHeartbeat(doneCh chan error) ([]OutgoingMessage, error) {
 	raft.debug("heartbeat in flight")
 
 	if raft.requests.Size() >= int(raft.Config.MaxInFlightRequests) {
 		return nil, fmt.Errorf("request queue is full")
 	}
 
-	request := newInFlightRequest(raft.newRequestID(), nil, raft.Clock.CurrentTick()+100)
+	request := newInFlightRequest(raft.newRequestID(), doneCh, raft.Clock.CurrentTick()+100)
 	raft.requests.Insert(request)
 
 	messages := make([]OutgoingMessage, 0, len(raft.Config.Replicas)-1)
 
-	var minLogIndexSentToAllReplicas *uint64 = nil
+	var minLogIndexSentToAllReplicas uint64 = raft.Storage.LastLogIndex()
 
 	for _, replica := range raft.Config.Replicas {
 		if replica == raft.Config.ReplicaID {
@@ -936,11 +961,8 @@ func (raft *Raft) sendHeartbeat() ([]OutgoingMessage, error) {
 		}
 		if len(entries) > 0 {
 			lastEntry := entries[len(entries)-1]
-			if minLogIndexSentToAllReplicas == nil {
-				minLogIndexSentToAllReplicas = &lastEntry.Index
-			} else {
-				*minLogIndexSentToAllReplicas = cmpx.Min(*minLogIndexSentToAllReplicas, lastEntry.Index)
-			}
+
+			minLogIndexSentToAllReplicas = cmpx.Min(minLogIndexSentToAllReplicas, lastEntry.Index)
 		}
 
 		var previousLogIndex uint64 = 0
@@ -1012,17 +1034,22 @@ func (raft *Raft) hasVoted() bool {
 	return raft.mutableState.currentTermState.votedFor != 0
 }
 
-func (raft *Raft) applyCommittedEntries(leaderCommitIndex uint64, lastlogIndex uint64) error {
+func (raft *Raft) commit(index uint64) error {
+	if err := raft.applyCommittedEntries(index, raft.Storage.LastLogIndex()); err != nil {
+		return fmt.Errorf("applying commited entries: %w", err)
+	}
+	return nil
+}
+
+func (raft *Raft) applyCommittedEntries(leaderCommitIndex uint64, lastLogIndex uint64) error {
 	raft.debug("leaderCommitIndex=%d lastLogIndex=%d applying uncomitted entries",
 		leaderCommitIndex,
-		lastlogIndex,
+		lastLogIndex,
 	)
-	commitIndex := leaderCommitIndex
-	if lastlogIndex < leaderCommitIndex {
-		commitIndex = lastlogIndex
-	}
 
-	for i := raft.mutableState.commitIndex; i <= commitIndex; i++ {
+	commitUpToIndex := cmpx.Min(leaderCommitIndex, lastLogIndex)
+
+	for i := raft.mutableState.commitIndex; i <= commitUpToIndex; i++ {
 		if i == 0 {
 			continue
 		}
@@ -1031,12 +1058,16 @@ func (raft *Raft) applyCommittedEntries(leaderCommitIndex uint64, lastlogIndex u
 		if err != nil {
 			return fmt.Errorf("fetching entry at index: index=%d %w", i, err)
 		}
+		if entry.IsSystemEntry() {
+			continue
+		}
+
 		if err := raft.stateMachine.Apply(entry); err != nil {
 			return fmt.Errorf("applying entry to state machine: %w", err)
 		}
 	}
 
-	raft.mutableState.commitIndex = commitIndex
+	// raft.mutableState.commitIndex = commitUpToIndex
 
 	return nil
 }
