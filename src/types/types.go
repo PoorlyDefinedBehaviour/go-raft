@@ -50,7 +50,7 @@ func (message *AppendEntriesInput) ID() uint64 {
 }
 
 func (entry *Entry) IsSystemEntry() bool {
-	return entry.Type == NewLeaderEntryType || entry.Type == HeartbeatEntryType
+	return entry.Type > 0 && entry.Type <= MaxReservedEntryType
 }
 
 type AppendEntriesOutput struct {

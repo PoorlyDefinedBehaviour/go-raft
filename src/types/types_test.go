@@ -6,27 +6,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestEntryIsHeartbeatEntry(t *testing.T) {
+func TestEntryIsSystemEntry(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		description string
-		entry       Entry
-		expected    bool
-	}{
-		{
-			description: "entry is not a heartbeat entry, returns false",
-			entry:       Entry{Type: HeartbeatEntryType + 1},
-			expected:    false,
-		},
-		{
-			description: "entry is a heartbeat entry, returns true",
-			entry:       Entry{Type: HeartbeatEntryType},
-			expected:    true,
-		},
+	for i := 1; i <= MaxReservedEntryType; i++ {
+		entry := Entry{Type: uint8(i)}
+		assert.True(t, entry.IsSystemEntry())
 	}
 
-	for _, tt := range cases {
-		assert.Equal(t, tt.expected, tt.entry.IsHeartbeatEntry(), tt.description)
+	for i := MaxReservedEntryType + 1; i < MaxReservedEntryType+10; i++ {
+		entry := Entry{Type: uint8(i)}
+		assert.False(t, entry.IsSystemEntry())
 	}
 }
