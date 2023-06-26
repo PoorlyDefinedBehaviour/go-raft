@@ -28,7 +28,6 @@ type Cluster struct {
 	Config   ClusterConfig
 	Replicas []TestReplica
 	Network  *network.Network
-	Bus      *messagebus.MessageBus
 	Rand     *rand.DefaultRandom
 	ticks    uint64
 }
@@ -154,7 +153,6 @@ func (cluster *Cluster) TickUntilEveryMessageIsDelivered() {
 
 func (cluster *Cluster) Tick() {
 	cluster.ticks++
-	cluster.Bus.Tick()
 	cluster.Network.Tick()
 
 	for _, replica := range cluster.Replicas {
@@ -238,7 +236,6 @@ func Setup(configs ...ClusterConfig) Cluster {
 	},
 		rand,
 	)
-	bus := messagebus.NewMessageBus(network)
 
 	configReplicas := make([]types.ReplicaID, 0, len(replicaAddresses))
 	for i := 1; i <= int(config.NumReplicas); i++ {
@@ -257,7 +254,8 @@ func Setup(configs ...ClusterConfig) Cluster {
 			MaxInFlightRequests:      config.Raft.MaxInFlightRequests,
 		}
 
-		kv := kv.NewKvStore(bus)
+		bus := messagebus.NewMessageBus(network)
+		kv := kv.New(bus)
 
 		dir := path.Join(os.TempDir(), uuid.NewString())
 		storage, err := storage.NewFileStorage(dir)
@@ -278,7 +276,7 @@ func Setup(configs ...ClusterConfig) Cluster {
 	}
 	network.Setup(replicasOnMessage)
 
-	return Cluster{Config: config, Replicas: replicas, Network: network, Bus: bus, Rand: rand}
+	return Cluster{Config: config, Replicas: replicas, Network: network, Rand: rand}
 }
 
 func TestNewRaft(t *testing.T) {
@@ -295,12 +293,12 @@ func TestNewRaft(t *testing.T) {
 
 		assert.NoError(t, replica.voteFor(candidate.Config.ReplicaID, candidate.Term()))
 
-		kv := kv.NewKvStore(cluster.Bus)
+		kv := kv.New(cluster.Bus)
 
 		storage, err := storage.NewFileStorage(replica.Storage.Directory())
 		assert.NoError(t, err)
 
-		replicaAfterRestart, err := New(replica.Config, replica.bus, storage, kv, cluster.Rand, testingclock.NewClock())
+		replicaAfterRestart, err := New(replica.Config, replica.Bus, storage, kv, cluster.Rand, testingclock.NewClock())
 		assert.NoError(t, err)
 
 		assert.True(t, replicaAfterRestart.VotedForCandidateInCurrentTerm(candidate.Config.ReplicaID))
@@ -883,7 +881,6 @@ func TestCandidate(t *testing.T) {
 			},
 			)
 
-			cluster.Bus.Tick()
 			cluster.Network.Tick()
 
 			candidateB.Tick()

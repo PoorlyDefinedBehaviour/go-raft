@@ -29,7 +29,6 @@ type Cluster struct {
 	Replicas []*TestReplica
 	Clients  []*TestClient
 	Network  *network.Network
-	Bus      *messagebus.MessageBus
 	Rand     *rand.DefaultRandom
 }
 
@@ -80,7 +79,7 @@ func (cluster *Cluster) restart(replicaID types.ReplicaID) {
 	if err != nil {
 		panic(err)
 	}
-	kv := kv.NewKvStore(cluster.Bus)
+	kv := kv.New((*replica).Raft.Bus)
 	raft, err := raft.New(raft.Config{
 		ReplicaID:                (*replica).Config.ReplicaID,
 		Replicas:                 (*replica).Config.Replicas,
@@ -88,7 +87,7 @@ func (cluster *Cluster) restart(replicaID types.ReplicaID) {
 		MinLeaderElectionTimeout: (*replica).Config.MinLeaderElectionTimeout,
 		LeaderHeartbeatTimeout:   (*replica).Config.LeaderHeartbeatTimeout,
 		MaxInFlightRequests:      20,
-	}, cluster.Bus, storage, kv, cluster.Rand, (*replica).Clock)
+	}, (*replica).Raft.Bus, storage, kv, cluster.Rand, (*replica).Clock)
 	if err != nil {
 		panic(err)
 	}
@@ -158,10 +157,8 @@ func (cluster *Cluster) TickUntilEveryMessageIsDelivered() {
 }
 
 func (cluster *Cluster) Tick() {
-	fmt.Printf("TICK=%d cluster.Tick()\n", cluster.Ticks)
 	cluster.Ticks++
 
-	cluster.Bus.Tick()
 	cluster.Network.Tick()
 
 	for _, replica := range cluster.Replicas {
@@ -254,8 +251,6 @@ func Setup(configs ...ClusterConfig) Cluster {
 
 	network := network.New(config.Network, rand)
 
-	bus := messagebus.NewMessageBus(network)
-
 	configReplicas := make([]types.ReplicaID, 0, len(replicaAddresses))
 	for i := 1; i <= int(config.NumReplicas); i++ {
 		configReplicas = append(configReplicas, uint16(i))
@@ -264,7 +259,8 @@ func Setup(configs ...ClusterConfig) Cluster {
 	replicas := make([]*TestReplica, 0)
 
 	for _, replica := range configReplicas {
-		kv := kv.NewKvStore(bus)
+		bus := messagebus.NewMessageBus(network)
+		kv := kv.New(bus)
 
 		dir := path.Join(os.TempDir(), uuid.NewString())
 		storage, err := storage.NewFileStorage(dir)
@@ -298,5 +294,5 @@ func Setup(configs ...ClusterConfig) Cluster {
 		clients = append(clients, &TestClient{})
 	}
 
-	return Cluster{Config: config, Replicas: replicas, Clients: clients, Network: network, Bus: bus, Rand: rand}
+	return Cluster{Config: config, Replicas: replicas, Clients: clients, Network: network, Rand: rand}
 }
