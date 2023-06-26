@@ -15,6 +15,7 @@ func NewMessageBus(network types.Network) *MessageBus {
 	return &MessageBus{tick: 0, network: network}
 }
 
+// TODO: since each replica has its own bus, there's no need to include the `from` replica id.
 func (bus *MessageBus) Send(from, to types.ReplicaID, message types.Message) {
 	assert.True(message.ID() != 0, "message id is required")
 	assert.True(from != to, "replica cannot send message to itself")
