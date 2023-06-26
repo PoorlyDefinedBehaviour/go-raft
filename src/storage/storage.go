@@ -131,7 +131,6 @@ func (storage *FileStorage) AppendEntries(entries []types.Entry) error {
 		entry.Index = uint64(len(storage.entries) + 1)
 		storage.entries = append(storage.entries, entry)
 	}
-	storage.entries = append(storage.entries, entries...)
 
 	return nil
 }
@@ -174,6 +173,7 @@ func (storage *FileStorage) GetBatch(startingIndex uint64, batchSize uint64) ([]
 		if err != nil {
 			return out, fmt.Errorf("fetching entry at index: index=%d %w", index, err)
 		}
+
 		out = append(out, *entry)
 	}
 
