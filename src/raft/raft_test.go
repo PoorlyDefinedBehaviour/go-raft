@@ -293,7 +293,7 @@ func TestNewRaft(t *testing.T) {
 
 		assert.NoError(t, replica.voteFor(candidate.Config.ReplicaID, candidate.Term()))
 
-		kv := kv.New(cluster.Bus)
+		kv := kv.New(replica.Bus)
 
 		storage, err := storage.NewFileStorage(replica.Storage.Directory())
 		assert.NoError(t, err)
