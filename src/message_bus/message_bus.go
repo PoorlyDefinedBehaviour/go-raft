@@ -6,16 +6,13 @@ import (
 )
 
 type MessageBus struct {
-	tick    uint64
-	network types.Network
+	tick     uint64
+	network  types.Network
+	callback types.MessageCallback
 }
 
 func NewMessageBus(network types.Network) *MessageBus {
 	return &MessageBus{tick: 0, network: network}
-}
-
-func (bus *MessageBus) Tick() {
-	bus.tick++
 }
 
 func (bus *MessageBus) Send(from, to types.ReplicaID, message types.Message) {
@@ -25,6 +22,11 @@ func (bus *MessageBus) Send(from, to types.ReplicaID, message types.Message) {
 	bus.network.Send(from, to, message)
 }
 
+func (bus *MessageBus) ClientRequest(message *types.UserRequestInput) {
+	bus.callback(0, message)
+}
+
 func (bus *MessageBus) RegisterOnMessageCallback(replica types.ReplicaID, callback types.MessageCallback) {
+	bus.callback = callback
 	bus.network.RegisterCallback(replica, callback)
 }
