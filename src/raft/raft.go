@@ -716,8 +716,8 @@ func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) erro
 		return nil
 	}
 
-	if message.CurrentTerm > raft.mutableState.currentTermState.term {
-		raft.debug("AppendEntriesOutput FOUND HIGHER TERM=%d", message.CurrentTerm)
+	if message.CurrentTerm >= raft.mutableState.currentTermState.term {
+		raft.debug("AppendEntriesOutput FOUND REPLICA WITH >= TERM=%d", message.CurrentTerm)
 		if err := raft.newTerm(withTerm(message.CurrentTerm)); err != nil {
 			return fmt.Errorf("starting new term: %w", err)
 		}
