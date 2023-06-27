@@ -67,8 +67,6 @@ func ensureLogConsistency(t *testing.T, cluster *testingcluster.Cluster) {
 		return
 	}
 
-	fmt.Printf("REPLICA=%d leader logs: %+v\n", leader.Config.ReplicaID, leader.Storage.Debug())
-
 	for _, follower := range cluster.Followers() {
 		assert.True(t, leader.Storage.LastLogIndex() >= follower.Storage.LastLogIndex())
 		assert.True(t, leader.Storage.LastLogTerm() >= follower.Storage.LastLogTerm())

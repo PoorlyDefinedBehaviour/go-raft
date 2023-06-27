@@ -373,7 +373,7 @@ func (raft *Raft) VotedForCandidateInCurrentTerm(candidateID uint16) bool {
 }
 
 func (raft *Raft) startElection() ([]OutgoingMessage, error) {
-	raft.debug("NEW_ELECTION")
+	raft.debug("starting election")
 
 	request := newInFlightRequest(raft.newRequestID(), nil, raft.Clock.CurrentTick()+100)
 
@@ -627,14 +627,36 @@ func (raft *Raft) onAppendEntriesInput(message *types.AppendEntriesInput) (Outgo
 		return outgoingMessage, nil
 	}
 
-	if message.LeaderTerm >= raft.mutableState.currentTermState.term {
-		raft.debug("AppendEntriesInput LEADER WITH HIGHER TERM")
-		if err := raft.transitionToState(Follower); err != nil {
-			return outgoingMessage, fmt.Errorf("transitioning to follower after finding a replica with a higher term: %w", err)
+	switch raft.State() {
+	case Follower:
+		if message.LeaderTerm > raft.mutableState.currentTermState.term {
+			raft.debug("AppendEntriesInput follower found leader with > term")
+			if err := raft.newTerm(withTerm(message.LeaderTerm)); err != nil {
+				return outgoingMessage, fmt.Errorf("starting new term: %w", err)
+			}
 		}
-		if err := raft.newTerm(withTerm(message.LeaderTerm)); err != nil {
-			return outgoingMessage, fmt.Errorf("transitioning to new term after finding replica with a higher term: %w", err)
+	case Candidate:
+		if message.LeaderTerm >= raft.mutableState.currentTermState.term {
+			raft.debug("AppendEntriesInput candidate found replica with >= term")
+			if err := raft.transitionToState(Follower); err != nil {
+				return outgoingMessage, fmt.Errorf("transitioning to follower after finding a replica with a higher term: %w", err)
+			}
+			if err := raft.newTerm(withTerm(message.LeaderTerm)); err != nil {
+				return outgoingMessage, fmt.Errorf("transitioning to new term after finding replica with a higher term: %w", err)
+			}
 		}
+	case Leader:
+		if message.LeaderTerm > raft.mutableState.currentTermState.term {
+			raft.debug("AppendEntriesInput leader found replics with > term")
+			if err := raft.transitionToState(Follower); err != nil {
+				return outgoingMessage, fmt.Errorf("transitioning to follower after finding a replica with a higher term: %w", err)
+			}
+			if err := raft.newTerm(withTerm(message.LeaderTerm)); err != nil {
+				return outgoingMessage, fmt.Errorf("transitioning to new term after finding replica with a higher term: %w", err)
+			}
+		}
+	default:
+		panic(fmt.Sprintf("unreachable: unknown state: %d", raft.State()))
 	}
 
 	if message.PreviousLogIndex != raft.Storage.LastLogIndex() {
@@ -643,16 +665,6 @@ func (raft *Raft) onAppendEntriesInput(message *types.AppendEntriesInput) (Outgo
 			raft.Storage.LastLogIndex(),
 		)
 		return outgoingMessage, nil
-	}
-
-	if message.LeaderTerm >= raft.mutableState.currentTermState.term {
-		raft.debug("AppendEntriesInput leader is up to date")
-		if err := raft.newTerm(withTerm(message.LeaderTerm)); err != nil {
-			return outgoingMessage, fmt.Errorf("starting new term: %w", err)
-		}
-		if err := raft.transitionToState(Follower); err != nil {
-			return outgoingMessage, fmt.Errorf("transitioning to follower: %w", err)
-		}
 	}
 
 	if message.PreviousLogIndex > 0 {
@@ -716,6 +728,31 @@ func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) erro
 		return nil
 	}
 
+	switch raft.State() {
+	case Follower:
+		raft.debug("AppendEntriesOutput received append entries response after transitioning to follower, ignoring")
+		raft.requests.RemoveIf(func(req **request) bool { return (*req).requestID == message.MessageID })
+		return nil
+	case Candidate:
+		raft.debug("AppendEntriesOutput candidate received append entries response ignoring")
+		raft.requests.RemoveIf(func(req **request) bool { return (*req).requestID == message.MessageID })
+		return nil
+	case Leader:
+		if message.CurrentTerm > raft.mutableState.currentTermState.term {
+			raft.debug("AppendEntriesOutput found replica with higher term TERM=%d", message.CurrentTerm)
+			if err := raft.newTerm(withTerm(message.CurrentTerm)); err != nil {
+				return fmt.Errorf("starting new term: %w", err)
+			}
+			if err := raft.transitionToState(Follower); err != nil {
+				return fmt.Errorf("transitioning to follower: %w", err)
+			}
+			raft.requests.RemoveIf(func(req **request) bool { return (*req).requestID == message.MessageID })
+			return nil
+		}
+	default:
+		panic(fmt.Sprintf("unknown state: %s", raft.State()))
+	}
+
 	if message.CurrentTerm > raft.mutableState.currentTermState.term {
 		raft.debug("AppendEntriesOutput found replica with higher term TERM=%d", message.CurrentTerm)
 		if err := raft.newTerm(withTerm(message.CurrentTerm)); err != nil {
@@ -726,7 +763,6 @@ func (raft *Raft) onAppendEntriesOutput(message *types.AppendEntriesOutput) erro
 		}
 		return nil
 	}
-
 	req, found := raft.requests.Find(func(request **request) bool { return (*request).requestID == message.MessageID })
 	if !found {
 		raft.debug("message not found in queue ID=%d REPLICA=%d", message.MessageID, message.ReplicaID)
@@ -856,21 +892,32 @@ func (raft *Raft) onRequestVoteOutput(message *types.RequestVoteOutput) ([]Outgo
 		return nil, nil
 	}
 
-	req, reqFound := raft.requests.Find(func(req **request) bool { return (*req).requestID == message.MessageID })
-
-	if message.CurrentTerm > raft.mutableState.currentTermState.term {
-		raft.debug("RequestVoteOutput found replica with higher term TERM=%d REPLICA=%d", message.CurrentTerm, message.ReplicaID)
-		if err := raft.newTerm(withTerm(message.CurrentTerm)); err != nil {
-			return nil, fmt.Errorf("starting new term: %w", err)
-		}
-		if err := raft.transitionToState(Follower); err != nil {
-			return nil, fmt.Errorf("transitioning to follower: %w", err)
-		}
-		if reqFound {
-			_ = raft.requests.Remove(req)
-		}
+	switch raft.State() {
+	case Follower:
+		raft.debug("RequestVoteOutput received request vote response after transitioning to follower, ignoring")
+		raft.requests.RemoveIf(func(req **request) bool { return (*req).requestID == message.MessageID })
 		return nil, nil
+	case Candidate:
+		if message.CurrentTerm > raft.mutableState.currentTermState.term {
+			raft.debug("RequestVoteOutput candidate found replica with > term TERM=%d REPLICA=%d", message.CurrentTerm, message.ReplicaID)
+			if err := raft.newTerm(withTerm(message.CurrentTerm)); err != nil {
+				return nil, fmt.Errorf("starting new term: %w", err)
+			}
+			if err := raft.transitionToState(Follower); err != nil {
+				return nil, fmt.Errorf("transitioning to follower: %w", err)
+			}
+			raft.requests.RemoveIf(func(req **request) bool { return (*req).requestID == message.MessageID })
+			return nil, nil
+		}
+	case Leader:
+		raft.debug(" AppendEntriesOutput leader received request vote response, ignoring")
+		raft.requests.RemoveIf(func(req **request) bool { return (*req).requestID == message.MessageID })
+		return nil, nil
+	default:
+		panic(fmt.Sprintf("unknown state: %s", raft.State()))
 	}
+
+	req, reqFound := raft.requests.Find(func(req **request) bool { return (*req).requestID == message.MessageID })
 
 	if !reqFound {
 		raft.debug("RequestVoteOutput received response for timed out request, ignoring")

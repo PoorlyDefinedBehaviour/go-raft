@@ -559,48 +559,6 @@ func TestHandleMessageAppendEntriesInput(t *testing.T) {
 	})
 }
 
-func TestHandleMessageUserRequestInput(t *testing.T) {
-	t.Parallel()
-
-	t.Run("request completes after entries being replicated to the majority of replicas", func(t *testing.T) {
-		t.Parallel()
-
-		// TODO
-
-		// cluster := Setup()
-
-		// leader := cluster.MustWaitForLeader()
-
-		// value, err := json.Marshal(map[string]any{
-		// 	"key":   "key",
-		// 	"value": []byte("value"),
-		// })
-		// assert.NoError(t, err)
-
-		// doneCh, err := leader.HandleUserRequest(context.Background(), kv.SetCommand, value)
-		// assert.NoError(t, err)
-		// fmt.Printf("\n\naaaaaaa doneCh %+v\n\n", doneCh)
-
-		// cluster.TickUntilEveryMessageIsDelivered()
-
-		// fmt.Printf("\n\naaaaaaa before err = <-request.DoneCh\n\n")
-		// err = <-doneCh
-		// assert.NoError(t, err)
-		// fmt.Printf("\n\naaaaaaa after err = <-request.DoneCh\n\n")
-
-		// for i := 1; i <= int(leader.Storage.LastLogIndex()); i++ {
-		// 	leaderEntry, err := leader.Storage.GetEntryAtIndex(uint64(i))
-		// 	assert.NoError(t, err)
-
-		// 	for _, replica := range cluster.Followers() {
-		// 		replicaEntry, err := replica.Storage.GetEntryAtIndex(uint64(i))
-		// 		assert.NoError(t, err)
-		// 		assert.Equal(t, *leaderEntry, *replicaEntry)
-		// 	}
-		// }
-	})
-}
-
 func TestHandleMessageRequestVoteInput(t *testing.T) {
 	t.Parallel()
 
