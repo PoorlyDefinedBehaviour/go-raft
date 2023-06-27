@@ -872,7 +872,7 @@ func TestCandidate(t *testing.T) {
 
 			assert.NoError(t, candidateA.newTerm(withTerm(candidateB.mutableState.currentTermState.term+1)))
 
-			cluster.Bus.Send(candidateA.Config.ReplicaID, candidateB.Config.ReplicaID, &types.RequestVoteInput{
+			candidateA.Bus.Send(candidateB.Config.ReplicaID, &types.RequestVoteInput{
 				MessageID:             1,
 				CandidateID:           candidateA.Config.ReplicaID,
 				CandidateTerm:         candidateA.mutableState.currentTermState.term,

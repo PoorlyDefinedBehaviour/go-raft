@@ -306,7 +306,7 @@ func (raft *Raft) Tick() {
 			return
 		}
 		for _, message := range outgoingMessages {
-			raft.Bus.Send(raft.Config.ReplicaID, message.To, message.Message)
+			raft.Bus.Send(message.To, message.Message)
 		}
 	}
 	if raft.leaderElectionTimeout.Fired() {
@@ -316,7 +316,7 @@ func (raft *Raft) Tick() {
 			return
 		}
 		for _, message := range outgoingMessages {
-			raft.Bus.Send(raft.Config.ReplicaID, message.To, message.Message)
+			raft.Bus.Send(message.To, message.Message)
 		}
 	}
 }
@@ -534,7 +534,7 @@ func (raft *Raft) OnMessage(from types.ReplicaID, message types.Message) {
 	}
 
 	for _, message := range outgoingMessages {
-		raft.Bus.Send(raft.Config.ReplicaID, message.To, message.Message)
+		raft.Bus.Send(message.To, message.Message)
 	}
 }
 
