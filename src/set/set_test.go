@@ -75,6 +75,22 @@ func (model *Model[T]) Retain(predicate func(*T) bool) {
 	model.items = items
 }
 
+func (model *Model[T]) RemoveIf(predicate func(*T) bool) bool {
+	for i, item := range model.items {
+		if predicate(&item) {
+			if i == 0 {
+				model.items = model.items[1:]
+			} else {
+				model.items = append(model.items[0:i], model.items[i+1:]...)
+			}
+
+			return true
+		}
+	}
+
+	return false
+}
+
 func maybeExistingMember[T comparable](t *rapid.T, model *Model[T]) T {
 	var member T
 	if model.Size() == 0 {
@@ -93,11 +109,21 @@ func TestSetModel(t *testing.T) {
 		OpContains = "contains"
 		OpFind     = "find"
 		OpRetain   = "retain"
+		OpRemoveIf = "removeif"
 		OpSize     = "size"
 	)
 
 	rapid.Check(t, func(t *rapid.T) {
-		ops := rapid.SliceOf(rapid.SampledFrom([]string{OpInsert, OpRemove, OpContains, OpFind, OpRetain, OpSize})).Draw(t, "ops")
+		ops := rapid.SliceOf(rapid.SampledFrom([]string{
+			OpInsert,
+			OpRemove,
+			OpContains,
+			OpFind,
+			OpRetain,
+			OpRemoveIf,
+			OpSize,
+		})).
+			Draw(t, "ops")
 
 		model := newModel[int]()
 
@@ -136,6 +162,14 @@ func TestSetModel(t *testing.T) {
 				model.Retain(func(x *int) bool { return *x <= value })
 				set.Retain(func(x *int) bool { return *x <= value })
 
+			case OpRemoveIf:
+				value := maybeExistingMember(t, &model)
+
+				modelRemoved := model.RemoveIf(func(x *int) bool { return *x == value })
+				removed := set.RemoveIf(func(x *int) bool { return *x == value })
+
+				assert.Equal(t, modelRemoved, removed)
+
 			case OpSize:
 				assert.Equal(t, model.Size(), set.Size())
 
@@ -170,4 +204,34 @@ func TestSet(t *testing.T) {
 	assert.False(t, set.Contains(2))
 
 	assert.True(t, set.Contains(1))
+}
+
+func TestRemoveIf(t *testing.T) {
+	t.Parallel()
+
+	set := New[int]()
+
+	assert.Equal(t, 0, set.Size())
+
+	set.RemoveIf(func(*int) bool { return true })
+
+	assert.Equal(t, 0, set.Size())
+
+	set.Insert(1)
+	set.Insert(2)
+	set.Insert(3)
+
+	assert.Equal(t, 3, set.Size())
+
+	set.RemoveIf(func(x *int) bool { return *x == 2 })
+
+	assert.Equal(t, 2, set.Size())
+
+	set.RemoveIf(func(x *int) bool { return *x == 1 })
+
+	assert.Equal(t, 1, set.Size())
+
+	set.RemoveIf(func(x *int) bool { return *x == 3 })
+
+	assert.Equal(t, 0, set.Size())
 }

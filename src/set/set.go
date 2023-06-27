@@ -20,6 +20,15 @@ func (set *T[Type]) Remove(value Type) bool {
 	return removed
 }
 
+func (set *T[Type]) RemoveIf(predicate func(*Type) bool) bool {
+	value, found := set.Find(predicate)
+	if found {
+		set.Remove(value)
+	}
+
+	return found
+}
+
 func (set *T[Type]) Contains(value Type) bool {
 	_, ok := set.members[value]
 	return ok
