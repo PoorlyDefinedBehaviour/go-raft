@@ -16,12 +16,12 @@ type setCommandEntry struct {
 }
 
 type KvStore struct {
-	items map[string][]byte
+	Items map[string][]byte
 	bus   *messagebus.MessageBus
 }
 
 func New(bus *messagebus.MessageBus) *KvStore {
-	return &KvStore{items: make(map[string][]byte), bus: bus}
+	return &KvStore{Items: make(map[string][]byte), bus: bus}
 }
 
 func (kv *KvStore) Set(key string, value []byte) (chan error, error) {
@@ -52,7 +52,7 @@ func (kv *KvStore) Apply(entry *types.Entry) error {
 			return fmt.Errorf("unmarshaling set command: entry.Value=%s %w", string(entry.Value), err)
 		}
 
-		kv.items[command.Key] = command.Value
+		kv.Items[command.Key] = command.Value
 	default:
 		return fmt.Errorf("unknown entry type: entry=%+v", *entry)
 	}
@@ -61,6 +61,6 @@ func (kv *KvStore) Apply(entry *types.Entry) error {
 }
 
 func (kv *KvStore) Get(key string) ([]byte, bool) {
-	value, ok := kv.items[key]
+	value, ok := kv.Items[key]
 	return value, ok
 }

@@ -1,6 +1,7 @@
 package testingcluster
 
 import (
+	"container/heap"
 	cryptorand "crypto/rand"
 	"fmt"
 	"math"
@@ -21,15 +22,31 @@ import (
 	testingclock "github.com/poorlydefinedbehaviour/raft-go/src/testing/clock"
 	"github.com/poorlydefinedbehaviour/raft-go/src/testing/network"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
+	"pgregory.net/rapid"
 )
 
 type Cluster struct {
-	Ticks    uint64
-	Config   ClusterConfig
+	// The current tick.
+	Ticks uint64
+
+	// The cluster config.
+	Config ClusterConfig
+
+	// Used to simulate a replica composed of a raft state machine and a key value store.
 	Replicas []*TestReplica
-	Clients  []*TestClient
-	Network  *network.Network
-	Rand     *rand.DefaultRandom
+
+	// Used to simulate clients that send requests.
+	Clients []*TestClient
+
+	Network *network.Network
+
+	Rand *rand.DefaultRandom
+
+	// User requests that have been sent but a response has not been received for yet.
+	InFlightClientRequests []InFlightRequest
+
+	// Responses received for user requests.
+	ResponsesReceived []Response
 }
 
 type TestReplica struct {
@@ -47,7 +64,36 @@ func (replica *TestReplica) isAlive(tick uint64) bool {
 	return replica.crashedUntilTick <= tick
 }
 
-type TestClient struct{}
+type TestClient struct {
+	requests PriorityQueue
+}
+
+type ClientOp = string
+
+const (
+	ClientSetRequest ClientOp = "ClientSetRequest"
+	ClientGetRequest ClientOp = "ClientGetRequest"
+)
+
+type ClientRequest struct {
+	SendAtTick uint64
+	Key        string
+	Value      []byte
+	Op         ClientOp
+}
+
+type InFlightRequest struct {
+	request *ClientRequest
+	doneCh  chan error
+}
+
+type Response struct {
+	ReceivedAtTick uint64
+	Request        *ClientRequest
+	Err            error
+	Value          []byte
+	Found          bool
+}
 
 func (cluster *Cluster) crash(replicaID types.ReplicaID) {
 	crashUntilTick := cluster.replicaCrashedUntilTick()
@@ -161,6 +207,75 @@ func (cluster *Cluster) Tick() {
 
 	cluster.Network.Tick()
 
+	cluster.tickClientRequests()
+
+	cluster.tickReplicas()
+
+	cluster.tickClientResponses()
+}
+
+func (cluster *Cluster) tickClientRequests() {
+	for _, client := range cluster.Clients {
+		request := client.requests.Peek()
+		if request == nil {
+			continue
+		}
+
+		if request.SendAtTick > cluster.Ticks {
+			continue
+		}
+
+		request = heap.Pop(&client.requests).(*ClientRequest)
+
+		// TODO: send message to any replica after replicas start redirecting requests to the leader.
+		leader := cluster.Leader()
+		if leader == nil {
+			continue
+		}
+
+		switch request.Op {
+		case ClientSetRequest:
+			doneCh, err := leader.Kv.Set(request.Key, request.Value)
+			if err != nil {
+				panic(err)
+			}
+			cluster.InFlightClientRequests = append(cluster.InFlightClientRequests, InFlightRequest{
+				request: request,
+				doneCh:  doneCh,
+			})
+		case ClientGetRequest:
+			request.Key = maybeExistingKvKey(cluster.Rand, leader.Kv)
+
+			value, found := leader.Kv.Get(request.Key)
+
+			cluster.ResponsesReceived = append(cluster.ResponsesReceived, Response{
+				ReceivedAtTick: cluster.Ticks,
+				Request:        request,
+				Err:            nil,
+				Value:          value,
+				Found:          found,
+			})
+		default:
+			panic(fmt.Sprintf("unexpected client request op: %s", request.Op))
+		}
+
+	}
+}
+
+func (cluster *Cluster) tickClientResponses() {
+	for _, request := range cluster.InFlightClientRequests {
+		select {
+		case err := <-request.doneCh:
+			cluster.ResponsesReceived = append(cluster.ResponsesReceived, Response{
+				Request: request.request,
+				Err:     err,
+			})
+		default:
+		}
+	}
+}
+
+func (cluster *Cluster) tickReplicas() {
 	for _, replica := range cluster.Replicas {
 		if replica.isAlive(cluster.Ticks) {
 			if !replica.isRunning {
@@ -192,6 +307,7 @@ func (cluster *Cluster) Leader() *TestReplica {
 
 type ClusterConfig struct {
 	Seed        int64
+	MaxTicks    uint64
 	NumReplicas uint16
 	NumClients  uint64
 	Network     network.NetworkConfig
@@ -199,6 +315,7 @@ type ClusterConfig struct {
 }
 
 type RaftConfig struct {
+	MaxInFlightRequests      uint16
 	ReplicaCrashProbability  float64
 	MaxReplicaCrashTicks     uint64
 	MaxLeaderElectionTimeout time.Duration
@@ -214,6 +331,7 @@ func defaultConfig() ClusterConfig {
 
 	return ClusterConfig{
 		Seed:        bigint.Int64(),
+		MaxTicks:    math.MaxUint64,
 		NumReplicas: 3,
 		Network: network.NetworkConfig{
 			PathClogProbability:      0.0,
@@ -223,6 +341,7 @@ func defaultConfig() ClusterConfig {
 			MaxMessageDelayTicks:     50,
 		},
 		Raft: RaftConfig{
+			MaxInFlightRequests:      20_000,
 			ReplicaCrashProbability:  0.0,
 			MaxReplicaCrashTicks:     0,
 			MaxLeaderElectionTimeout: 300 * time.Millisecond,
@@ -232,7 +351,7 @@ func defaultConfig() ClusterConfig {
 	}
 }
 
-func Setup(configs ...ClusterConfig) Cluster {
+func Setup(t *rapid.T, configs ...ClusterConfig) Cluster {
 	assert.True(len(configs) == 0 || len(configs) == 1, "zero or one configurations are allowed")
 
 	var config ClusterConfig
@@ -274,7 +393,7 @@ func Setup(configs ...ClusterConfig) Cluster {
 			MaxLeaderElectionTimeout: config.Raft.MaxLeaderElectionTimeout,
 			MinLeaderElectionTimeout: config.Raft.MinLeaderElectionTimeout,
 			LeaderHeartbeatTimeout:   config.Raft.LeaderHeartbeatTimeout,
-			MaxInFlightRequests:      20,
+			MaxInFlightRequests:      config.Raft.MaxInFlightRequests,
 		}, bus, storage, kv, rand, testingclock.NewClock())
 		if err != nil {
 			panic(err)
@@ -291,8 +410,48 @@ func Setup(configs ...ClusterConfig) Cluster {
 	clients := make([]*TestClient, 0, config.NumClients)
 
 	for i := 0; i < int(config.NumClients); i++ {
-		clients = append(clients, &TestClient{})
+		clients = append(clients, newTestClient(t, &config))
 	}
 
 	return Cluster{Config: config, Replicas: replicas, Clients: clients, Network: network, Rand: rand}
+}
+
+func newTestClient(t *rapid.T, config *ClusterConfig) *TestClient {
+	numRequests := rapid.Uint16Range(0, 1000).Draw(t, "numRequests")
+
+	requests := make(PriorityQueue, 0)
+
+	for i := 0; i < int(numRequests); i++ {
+		heap.Push(&requests, &RequestToSend{
+			Request: &ClientRequest{
+				SendAtTick: rapid.Uint64Range(0, config.MaxTicks).Draw(t, "AtTick"),
+				Value:      rapid.SliceOf(rapid.Byte()).Draw(t, "Value"),
+				Op:         rapid.SampledFrom([]ClientOp{ClientSetRequest, ClientGetRequest}).Draw(t, "Op"),
+			},
+		})
+	}
+
+	return &TestClient{
+		requests: requests,
+	}
+}
+
+func maybeExistingKvKey(rand rand.Random, kv *kv.KvStore) string {
+	if len(kv.Items) == 0 || !rand.GenBool(0.5) {
+		return "unkown"
+	}
+
+	index := rand.GenBetween(0, uint64(len(kv.Items)-1))
+
+	i := 0
+	for key := range kv.Items {
+		if i == int(index) {
+			return key
+
+		}
+
+		i++
+	}
+
+	panic("unreachable")
 }
