@@ -64,7 +64,10 @@ type Raft struct {
 	Clock clock.Clock
 
 	// The Raft state mutated directly by the Raft struct.
+	// TODO: flatten
 	mutableState MutableState
+
+	onStateTransition func(state State)
 
 	heartbeatTimeout timeout.T
 
@@ -142,6 +145,7 @@ func New(
 	stateMachine types.StateMachine,
 	rand rand.Random,
 	clock clock.Clock,
+	onStateTransition func(state State),
 ) (*Raft, error) {
 	if config.ReplicaID == 0 {
 		return nil, fmt.Errorf("replica id cannot be 0")
@@ -181,9 +185,10 @@ func New(
 			uint64(config.MinLeaderElectionTimeout.Milliseconds()),
 			uint64(config.MaxLeaderElectionTimeout.Milliseconds()),
 		)),
-		requests:      set.New[*request](),
-		nextRequestID: 1,
-		Clock:         clock,
+		onStateTransition: onStateTransition,
+		requests:          set.New[*request](),
+		nextRequestID:     1,
+		Clock:             clock,
 	}
 
 	bus.RegisterOnMessageCallback(raft.Config.ReplicaID, raft.OnMessage)
@@ -522,6 +527,8 @@ func (raft *Raft) transitionToState(state State) error {
 	}
 
 	raft.mutableState.state = state
+
+	raft.onStateTransition(state)
 
 	return nil
 }
