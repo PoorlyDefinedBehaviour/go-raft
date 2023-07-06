@@ -30,5 +30,9 @@ func (rand *DefaultRandom) GenBetween(min, max uint64) uint64 {
 	if max == 0 {
 		return 0
 	}
-	return min + rand.rand.Uint64()%max
+	value := rand.rand.Uint64() % max
+	if value < min {
+		return min
+	}
+	return value
 }
