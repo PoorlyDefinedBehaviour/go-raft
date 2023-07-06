@@ -1,7 +1,6 @@
 package testingcluster
 
 import (
-	"container/heap"
 	cryptorand "crypto/rand"
 	"fmt"
 	"math"
@@ -21,13 +20,16 @@ import (
 	"github.com/poorlydefinedbehaviour/raft-go/src/storage"
 	testingclock "github.com/poorlydefinedbehaviour/raft-go/src/testing/clock"
 	"github.com/poorlydefinedbehaviour/raft-go/src/testing/network"
+	testingrand "github.com/poorlydefinedbehaviour/raft-go/src/testing/rand"
 	"github.com/poorlydefinedbehaviour/raft-go/src/types"
-	"pgregory.net/rapid"
 )
 
 type Cluster struct {
 	// The current tick.
 	Ticks uint64
+
+	// Metrics used to debug simulations.
+	Metrics Metrics
 
 	// The cluster config.
 	Config ClusterConfig
@@ -49,6 +51,38 @@ type Cluster struct {
 	ResponsesReceived []Response
 }
 
+type Metrics struct {
+	StateTransitions map[raft.State]uint64
+	Requests         uint64
+	SuccessResponses uint64
+	FailureResponses uint64
+}
+
+func newMetrics() Metrics {
+	return Metrics{
+		StateTransitions: make(map[raft.State]uint64),
+		Requests:         0,
+		SuccessResponses: 0,
+		FailureResponses: 0,
+	}
+}
+
+func (metrics *Metrics) OnRequest() {
+	metrics.Requests++
+}
+
+func (metrics *Metrics) OnSuccessResponse() {
+	metrics.SuccessResponses++
+}
+
+func (metrics *Metrics) OnFailureResponse() {
+	metrics.FailureResponses++
+}
+
+func (cluster *Cluster) OnReplicaStateTransition(state raft.State) {
+	cluster.Metrics.StateTransitions[state]++
+}
+
 type TestReplica struct {
 	*raft.Raft
 	Kv *kv.KvStore
@@ -65,7 +99,10 @@ func (replica *TestReplica) isAlive(tick uint64) bool {
 }
 
 type TestClient struct {
-	requests PriorityQueue
+}
+
+func newTestClient() *TestClient {
+	return &TestClient{}
 }
 
 type ClientOp = string
@@ -76,10 +113,9 @@ const (
 )
 
 type ClientRequest struct {
-	SendAtTick uint64
-	Key        string
-	Value      []byte
-	Op         ClientOp
+	Key   string
+	Value []byte
+	Op    ClientOp
 }
 
 type InFlightRequest struct {
@@ -133,7 +169,7 @@ func (cluster *Cluster) restart(replicaID types.ReplicaID) {
 		MinLeaderElectionTimeout: (*replica).Config.MinLeaderElectionTimeout,
 		LeaderHeartbeatTimeout:   (*replica).Config.LeaderHeartbeatTimeout,
 		MaxInFlightRequests:      20,
-	}, (*replica).Raft.Bus, storage, kv, cluster.Rand, (*replica).Clock)
+	}, (*replica).Raft.Bus, storage, kv, cluster.Rand, (*replica).Clock, cluster.OnReplicaStateTransition)
 	if err != nil {
 		panic(err)
 	}
@@ -215,26 +251,30 @@ func (cluster *Cluster) Tick() {
 }
 
 func (cluster *Cluster) tickClientRequests() {
-	for _, client := range cluster.Clients {
-		request := client.requests.Peek()
-		if request == nil {
+	for _, _ = range cluster.Clients {
+		if !cluster.Rand.GenBool(cluster.Config.ClientRequestProbability) {
 			continue
 		}
-
-		if request.SendAtTick > cluster.Ticks {
-			continue
-		}
-
-		request = heap.Pop(&client.requests).(*ClientRequest)
 
 		// TODO: send message to any replica after replicas start redirecting requests to the leader.
 		leader := cluster.Leader()
 		if leader == nil {
+			cluster.debug("would send client request, but there's no leader")
 			continue
+		}
+
+		cluster.Metrics.OnRequest()
+
+		op, found := testingrand.Choose(cluster.Rand, []ClientOp{ClientGetRequest, ClientSetRequest})
+		assert.True(found, "bug: unable to choose client op")
+
+		request := &ClientRequest{
+			Op: op,
 		}
 
 		switch request.Op {
 		case ClientSetRequest:
+			cluster.debug("sending SET request. request=%+v", request)
 			doneCh, err := leader.Kv.Set(request.Key, request.Value)
 			if err != nil {
 				panic(err)
@@ -244,8 +284,10 @@ func (cluster *Cluster) tickClientRequests() {
 				doneCh:  doneCh,
 			})
 		case ClientGetRequest:
+
 			request.Key = maybeExistingKvKey(cluster.Rand, leader.Kv)
 
+			cluster.debug("sending GET request. request=%+v", request)
 			value, found := leader.Kv.Get(request.Key)
 
 			cluster.ResponsesReceived = append(cluster.ResponsesReceived, Response{
@@ -255,24 +297,38 @@ func (cluster *Cluster) tickClientRequests() {
 				Value:          value,
 				Found:          found,
 			})
+			cluster.Metrics.OnSuccessResponse()
 		default:
 			panic(fmt.Sprintf("unexpected client request op: %s", request.Op))
 		}
-
 	}
 }
 
 func (cluster *Cluster) tickClientResponses() {
+	requestsToKeep := make([]InFlightRequest, 0)
+
 	for _, request := range cluster.InFlightClientRequests {
 		select {
 		case err := <-request.doneCh:
+			cluster.debug("received response for client request. request=%+v err=%+v", request, err)
+
+			if err != nil {
+				cluster.Metrics.OnSuccessResponse()
+			} else {
+				cluster.Metrics.OnFailureResponse()
+			}
+
 			cluster.ResponsesReceived = append(cluster.ResponsesReceived, Response{
-				Request: request.request,
-				Err:     err,
+				Request:        request.request,
+				Err:            err,
+				ReceivedAtTick: cluster.Ticks,
 			})
 		default:
+			requestsToKeep = append(requestsToKeep, request)
 		}
 	}
+
+	cluster.InFlightClientRequests = requestsToKeep
 }
 
 func (cluster *Cluster) tickReplicas() {
@@ -306,12 +362,13 @@ func (cluster *Cluster) Leader() *TestReplica {
 }
 
 type ClusterConfig struct {
-	Seed        int64
-	MaxTicks    uint64
-	NumReplicas uint16
-	NumClients  uint64
-	Network     network.NetworkConfig
-	Raft        RaftConfig
+	Seed                     int64
+	MaxTicks                 uint64
+	NumReplicas              uint16
+	NumClients               uint64
+	ClientRequestProbability float64
+	Network                  network.NetworkConfig
+	Raft                     RaftConfig
 }
 
 type RaftConfig struct {
@@ -330,9 +387,11 @@ func defaultConfig() ClusterConfig {
 	}
 
 	return ClusterConfig{
-		Seed:        bigint.Int64(),
-		MaxTicks:    math.MaxUint64,
-		NumReplicas: 3,
+		Seed:                     bigint.Int64(),
+		MaxTicks:                 math.MaxUint64,
+		NumReplicas:              3,
+		NumClients:               3,
+		ClientRequestProbability: 0.10,
 		Network: network.NetworkConfig{
 			PathClogProbability:      0.0,
 			MessageReplayProbability: 0.0,
@@ -351,7 +410,7 @@ func defaultConfig() ClusterConfig {
 	}
 }
 
-func Setup(t *rapid.T, configs ...ClusterConfig) Cluster {
+func Setup(configs ...ClusterConfig) Cluster {
 	assert.True(len(configs) == 0 || len(configs) == 1, "zero or one configurations are allowed")
 
 	var config ClusterConfig
@@ -375,7 +434,7 @@ func Setup(t *rapid.T, configs ...ClusterConfig) Cluster {
 		configReplicas = append(configReplicas, uint16(i))
 	}
 
-	replicas := make([]*TestReplica, 0)
+	cluster := Cluster{Metrics: newMetrics(), Config: config, Network: network, Rand: rand}
 
 	for _, replica := range configReplicas {
 		bus := messagebus.NewMessageBus(network)
@@ -394,51 +453,36 @@ func Setup(t *rapid.T, configs ...ClusterConfig) Cluster {
 			MinLeaderElectionTimeout: config.Raft.MinLeaderElectionTimeout,
 			LeaderHeartbeatTimeout:   config.Raft.LeaderHeartbeatTimeout,
 			MaxInFlightRequests:      config.Raft.MaxInFlightRequests,
-		}, bus, storage, kv, rand, testingclock.NewClock())
+		},
+			bus,
+			storage,
+			kv,
+			rand,
+			testingclock.NewClock(),
+			cluster.OnReplicaStateTransition,
+		)
 		if err != nil {
 			panic(err)
 		}
-		replicas = append(replicas, &TestReplica{Raft: raft, Kv: kv, isRunning: true})
+		cluster.Replicas = append(cluster.Replicas, &TestReplica{Raft: raft, Kv: kv, isRunning: true})
 	}
 
 	replicasOnMessage := make(map[types.ReplicaID]types.MessageCallback)
-	for _, replica := range replicas {
+	for _, replica := range cluster.Replicas {
 		replicasOnMessage[replica.Config.ReplicaID] = replica.OnMessage
 	}
 	network.Setup(replicasOnMessage)
 
-	clients := make([]*TestClient, 0, config.NumClients)
-
 	for i := 0; i < int(config.NumClients); i++ {
-		clients = append(clients, newTestClient(t, &config))
+		cluster.Clients = append(cluster.Clients, newTestClient())
 	}
 
-	return Cluster{Config: config, Replicas: replicas, Clients: clients, Network: network, Rand: rand}
-}
-
-func newTestClient(t *rapid.T, config *ClusterConfig) *TestClient {
-	numRequests := rapid.Uint16Range(0, 1000).Draw(t, "numRequests")
-
-	requests := make(PriorityQueue, 0)
-
-	for i := 0; i < int(numRequests); i++ {
-		heap.Push(&requests, &RequestToSend{
-			Request: &ClientRequest{
-				SendAtTick: rapid.Uint64Range(0, config.MaxTicks).Draw(t, "AtTick"),
-				Value:      rapid.SliceOf(rapid.Byte()).Draw(t, "Value"),
-				Op:         rapid.SampledFrom([]ClientOp{ClientSetRequest, ClientGetRequest}).Draw(t, "Op"),
-			},
-		})
-	}
-
-	return &TestClient{
-		requests: requests,
-	}
+	return cluster
 }
 
 func maybeExistingKvKey(rand rand.Random, kv *kv.KvStore) string {
 	if len(kv.Items) == 0 || !rand.GenBool(0.5) {
-		return "unkown"
+		return fmt.Sprintf("random-key-%+v", rand.GenBetween(0, math.MaxUint64))
 	}
 
 	index := rand.GenBetween(0, uint64(len(kv.Items)-1))
