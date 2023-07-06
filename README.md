@@ -5,6 +5,12 @@
 - Distributed kv store
 - No request/response serialization 
 
+## Running the simulator
+
+```
+go test -run ^TestSimulate$ github.com/poorlydefinedbehaviour/raft-go/src/simulator -v -race
+```
+
 ## References
 
 [In Search of an Understandable Consensus Algorithm (Extended Version)](https://raft.github.io/raft.pdf)
