@@ -13,4 +13,5 @@ go test -run ^TestSimulate$ github.com/poorlydefinedbehaviour/raft-go/src/simula
 
 ## References
 
-[In Search of an Understandable Consensus Algorithm (Extended Version)](https://raft.github.io/raft.pdf)
+[In Search of an Understandable Consensus Algorithm (Extended Version)](https://raft.github.io/raft.pdf)  
+[CONSENSUS: BRIDGING THEORY AND PRACTICE](https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)
