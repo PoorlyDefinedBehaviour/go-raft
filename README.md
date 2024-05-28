@@ -1,3 +1,7 @@
+## About
+
+I don't have the time to finish this at the moment.
+
 ## Objectives
 
 - Deterministic simulation insipired by [Tigerbeetle](https://github.com/tigerbeetledb/tigerbeetle)
